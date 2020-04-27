@@ -1,0 +1,68 @@
+---
+title: "OAK HICKORY REGENERATION - SANDER"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+fontsize: 12pt
+output:
+  pdf_document:
+    toc: no
+  word_document:
+    toc: no
+mainfont: Cambria
+geometry: margin=.5in
+classoption: portrait
+---
+
+```{r include=FALSE}
+library(knitr)
+library(dplyr)
+library(ggplot2)
+
+FuncSanderPlot <- function(dat_df = SanderSummary_df, comm_type) {
+  ggplot(subset(dat_df, CGtype==comm_type), aes(x=reorder(SubPark,`50%`),  y=`50%`)) +
+      geom_point() +
+      geom_linerange(aes(ymin=`5%`, ymax=`95%`)) +
+      geom_hline(yintercept=1, linetype="dashed", color="blue") +
+      ylim(-0.1, 2.1) +
+      labs(y="Number of oak-hickory saplings per 10m2", x="SubPark", title=paste0("Oak-hickory sapling densities in ", comm_type, " communities")) +
+      theme_bw(base_size = 10)
+}
+OakHickOut <- readRDS("../Temp_out/OakHickOut.RDS")
+SanderSummary_df <- OakHickOut$OH_Sander_df
+```
+
+The Sander metric considers only saplings in the DBH categories 0--1 cm, 1--2.5 cm, and 2.5--5 cm. Saplings were counted in eight 10-m^2^ boxes for each surveyed plot. If the number of oak-hickory saplings exceeds ~1000 per hectare, the plot has adequate advanced regeneration of oak-hickory. This threshold value is equivalent to 1 oak-hickory sapling per 10-m^2^ box. Table 1 presents bootstrapped estimates of oak-hickory sapling densities, with 90% confidence intervals. For simplicity, the densities are presented as number of oak-hickory saplings per 10-m^2^ box. A value greater than 1 means the Sander et al. (1976) threshold is surpassed.
+
+&nbsp;
+
+**Table 1. Oak-hickory sapling densities in oak-hickory communities, by SubPark**
+*Estimates and 90% confidence intervals are determined from hierarchical bootstrapping of the survey data. 'Nplots' is the number of oak-hickory plots surveyed in that SubPark in Cycle 1. The last 3 columns show the 5%, 50%, and 95% quantiles for mean density (per 10-m^2^ box) of oak-hickory saplings in Oak-Hickory communities of that SubPark. For example, 12 oak-hickory plots were surveyed in CARL oak-Hickory communities. Ninety percent of the bootstrapped estimates of mean oak-hickory sapling densities were between 0.15 and 0.65 oak-hickory saplings per 10-m^2^ box. Half of the bootstrapped estimates were below 0.35 oak-hickory saplings per 10-m^2^ box (and half were above this value). A density greater than 1 means it exceeds the Sander et al. (1976) threshold for adequate advanced regeneration of oak-hickory. Therefore, even when sampling variability is taken into account, CARL oak-hickory plots seem to have, on average, oak-hickory sapling densities well below the regeneration threshold. NOTE 1: Only showing data for completed survey cycles. NOTE 2: For each plot in a bootstrap sample, if QAQC data were also available, those counts were equally likely to be sampled from because we assume the QAQC counts are just as likely as the non-QAQC counts to be correct. NOTE 3: Bootstrapping confidence intervals (or any other method of estimation) isn't recommended for very small sample sizes (e.g., few surveyed plots in a SubPark) but there are not clear rules of thumb for minimum sample sizes. Be wary of estimates for SubParks with few surveyed plots.*
+
+\newpage
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+OH_table <- subset(SanderSummary_df, CGtype=="OakHick")
+kable(OH_table, row.names = FALSE, align='c')
+```
+
+&nbsp;
+
+**Figure 1. Oak-hickory sapling densities in oak-hickory communities, by SubPark**
+*Median and 90% bootstrapped confidence intervals for estimated mean density of oak-hickory saplings. These data correspond with Table 1. The dashed blue line is the threshold density for adequate advanced regeneration.*
+```{r fig.width=9.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+FuncSanderPlot(comm_type = "OakHick")
+```
+
+\newpage
+
+**Table 2. Oak-hickory sapling densities in ruderal communities, by SubPark**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+rud_table <- subset(SanderSummary_df, CGtype=="Ruderal")
+kable(rud_table, row.names = FALSE, align='c')
+```
+
+&nbsp;
+
+**Figure 2. Oak-hickory sapling densities in ruderal communities, by SubPark**
+```{r fig.width=9.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+FuncSanderPlot(comm_type = "Ruderal")
+```

@@ -1,0 +1,1012 @@
+---
+title: "QAQC - TREES"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+fontsize: 12pt
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+mainfont: Cambria
+geometry: margin=.5in
+classoption: portrait
+---
+```{r include=FALSE}
+library(knitr)
+library(tidyverse)
+library(scales)
+library(plotrix)
+
+QAQCTreesOut <- readRDS("../Temp_out/QAQCTreesOut.RDS")
+
+FuncPlotPSA <- function(PSA_df, xlabel) {
+  # Function to create PSA plot
+  # 
+  # Args:
+  #   PSA_df:  Dataframe output from FuncPSA
+  #   xlabel: Text for x-axis label (category)
+  #
+  # Returns:
+  #   PSA point plot with bootstrapped 90% CI's, from within function
+  ggplot(PSA_df, aes(x=Grp,  y=PSA)) +
+    geom_point(na.rm = TRUE) +
+    geom_linerange(aes(ymin=`5%`, ymax=`95%`), na.rm = TRUE) +
+    ylim(0, 100) +
+    scale_x_discrete(labels=paste0(PSA_df$Grp,"\n(",PSA_df$Denom,")")) +
+    labs(y="Proportion of specific agreement (%)", x=xlabel, subtitle="(90% CI included only if 5 or more positive detections)") +
+    theme_bw(base_size = 10)
+}
+
+FuncColMat <- function (QAQC_df, categ_vec, upper_only=TRUE, title_add="") {
+  # Function to generate a color matrix of cover category changes. Numbers in cells are frequencies. 
+  # 
+  # Args:
+  #   QAQC_df:  A data frame with two columns of data, one is QAQC category and the other is non-QAQC category. Missing entries should be NA.
+  #   categ_vec:  Vector of categories (groups), sorted
+  #   upper_only:  If TRUE, creates upper triangular matrix
+  #   title_add:  Title for plot
+  #
+  # Returns:
+  #   Generates a color matrix plot from within function
+  #
+  QAQC_df[is.na(QAQC_df)] <- "XXX"
+  categ_vec <- c(categ_vec, "XXX")
+  QAQC_df[, 1] <- as.integer(factor(QAQC_df[, 1], levels=categ_vec)) # Convert categories to numbers
+  QAQC_df[, 2] <- as.numeric(factor(QAQC_df[, 2], levels=categ_vec))
+  
+  QAQC_mat <- as.matrix(QAQC_df)
+  if(upper_only) QAQC_mat <- t(apply(QAQC_mat,1,sort)) # For upper triangular, within each row, the smaller number is first
+  QAQC_squaremat <- table(factor(QAQC_mat[,1], levels=1:length(categ_vec)), factor(QAQC_mat[,2], levels=1:length(categ_vec)))
+
+  oldpar <- par(no.readonly = TRUE)
+  par(oma=c(0, 0, 0, 0))
+  par(cex=.8)
+  par(mar=c(3.1, 4.1, 7.1, 3.1))
+  
+  cellcol <- color.scale(cbind(QAQC_squaremat, seq(min(QAQC_squaremat, na.rm=TRUE), max(QAQC_squaremat, na.rm=TRUE), length.out=nrow(QAQC_squaremat))), c(1,0,0), c(1,1,0), c(0,1,1))[, 1:dim(QAQC_squaremat)[2]]
+  cellcol[QAQC_squaremat==0] <- "white"
+  cellcol[lower.tri(cellcol)] <- "black"
+  QAQC_squaremat[lower.tri(QAQC_squaremat)] <- NA
+  (color2D.matplot(QAQC_squaremat, cellcolors=cellcol, show.legend=FALSE, show.values=TRUE, axes=FALSE, xlab="", ylab=""))
+  (axis(3, at=0.75:dim(QAQC_squaremat)[2]-.25, tick=FALSE, labels=categ_vec, las=2))
+  (axis(2, at=.75:dim(QAQC_squaremat)[1]-.25, tick=FALSE, las=2, labels=rev(categ_vec)))
+  title(main=paste0(title_add, " (N = ", sum(QAQC_squaremat, na.rm=TRUE), ")"), line=4.4)
+  par(oldpar)  # set margins back to default
+}
+
+FuncBarHist <- function (dat, plot_vals, alt_xlab = NA) {
+  # Function to generate a histogram of count/continuous data differences between QAQC and non-QAQC surveys 
+  # 
+  # Args:
+  #   dat:  Dataframe of data
+  #   plot_vals:  Vector of plot values
+  #   alt_xlab:  Alternative text for the x-axis label
+  #
+  # Returns:
+  #   Generates a bar plot or histogram from within function
+  #
+  p <- ggplot(data = dat, aes(x = Metric)) +
+  scale_x_continuous(limits = c(-1,1)*plot_vals$range_max, breaks = seq(-1*plot_vals$range_max, plot_vals$range_max, by = plot_vals$range_int)) +
+  theme_bw(base_size = 12)
+  
+  if (plot_vals$type == "discrete") { # if count data, return a bar plot
+    p + geom_bar(fill = "white", color = "black", na.rm = TRUE) +
+      geom_vline(xintercept = 0, col = "red") +
+      labs(x = ifelse(is.na(alt_xlab), "Difference between surveys, q - n", alt_xlab), y = "Count")
+  } else {
+    p + geom_histogram(fill = "white", color = "black", binwidth = plot_vals$range_int, na.rm = TRUE) +
+      geom_vline(xintercept = 0, col = "red") +
+      labs(x = ifelse(is.na(alt_xlab), "% difference between surveys, (q - n)/mean", alt_xlab), y = "Count")
+  }
+}
+
+FuncBAPlot <- function(dat, plot_vals, alt_ylab = NA) {
+  # Function to generate a Bland-Altman plot 
+  # 
+  # Args:
+  #   dat:  Dataframe of data
+  #   plot_vals:  Vector of plot values
+  #   alt_ylab:  Alternative text for the y-axis label
+  #
+  # Returns:
+  #   Generates a Bland-Altman plot from within function
+  #
+  p <- ggplot(data=dat, aes(x=Mean, y=Metric)) +
+  geom_point(alpha = 0.20, na.rm = TRUE) +
+  stat_smooth(method="loess") +
+  geom_hline(yintercept=quantile(dat$Metric, probs=c(0.025, 0.975)), col="blue", linetype="dashed") +
+  geom_hline(yintercept = 0, col="red") +
+  scale_y_continuous(breaks=pretty_breaks()) +
+  theme_bw(base_size = 12)
+  
+  if (plot_vals$type == "discrete") { # if count data
+    p + labs(x="Survey mean", y = ifelse(is.na(alt_ylab), "Difference between surveys, q - n", alt_ylab), subtitle="(gray shading is 95% CI for loess curve; \ndashed blue lines span 95% of the difference values)")
+    } else { # if continuous
+      p + labs(x="Survey mean", y = ifelse(is.na(alt_ylab), "Difference between surveys, q - n, as % of mean", alt_ylab), subtitle="(gray shading is 95% CI for loess curve; \ndashed blue lines span 95% of the difference values)")
+    }
+}
+```
+
+\newpage
+
+## BINARY / CATEGORICAL VARIABLES
+### TREE STATUS
+
+Data Notes:
+
+* 0=tree should be excluded for some reason or can't be found, 1=live, 2=standing dead, 3=removed by humans, 4=fallen dead
+
+* This is a required field
+
+* NA/NA is a MISMATCH
+
+&nbsp;
+
+**Tree status summary**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+TreeStatus_df <- QAQCTreesOut[["Status"]][["FinalDat_df"]]
+TreeStatusSummary <- t(table(TreeStatus_df$Match))
+row.names(TreeStatusSummary)<- "Match?"
+kable(TreeStatusSummary)
+```
+
+**Tree status PSA**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["Status"]][["PSA_df"]])
+```
+
+**Tree status PSA plot**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotPSA(PSA_df = QAQCTreesOut[["Status"]][["PSA_df"]], xlabel = "Tree Status")
+```
+
+\newpage
+
+```{r fig.width=7, fig.height=7, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+FuncColMat(QAQC_df = QAQCTreesOut[["Status"]][["FinalDat_df"]][, c("Value1", "Value2")], categ_vec = 0:4, upper_only = TRUE, title_add = "QAQC Evaluation - Tree Status")
+```
+
+\newpage
+
+### TREE CROWN CLASS
+
+Data Notes:
+  
+* 1=open-grown, 2=dominant, 3=co-dominant, 4=intermediate, 5=overtopped
+  
+* Only use trees with Status=1 in both QAQC and non-QAQC survey
+  
+* This is a required field
+  
+* NA/NA is a MISMATCH
+
+&nbsp;
+  
+**Tree crown class summary**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+TreeCrown_df <- QAQCTreesOut[["Crown"]][["FinalDat_df"]]
+TreeCrownSummary <- t(table(TreeCrown_df$Match))
+row.names(TreeCrownSummary)<- "Match?"
+kable(TreeCrownSummary)
+```
+  
+**Tree crown class PSA**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["Crown"]][["PSA_df"]])
+```
+  
+**Tree crown class PSA plot**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotPSA(PSA_df = QAQCTreesOut[["Crown"]][["PSA_df"]], xlabel = "Tree Crown")
+```
+  
+\newpage
+
+```{r fig.width=7, fig.height=7, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncColMat(QAQC_df = QAQCTreesOut[["Crown"]][["FinalDat_df"]][, c("Value1", "Value2")], categ_vec = 1:5, upper_only = TRUE, title_add = "QAQC Evaluation - Tree Crown Class")
+```
+
+\newpage
+  
+### TREE VIGOR
+  
+Data Notes:
+    
+* 1=healthy, 2=light decline, 3=moderate decline, 4=severe decline, 5=functionally dead
+  
+* Only use trees with Status=1 in both QAQC and non-QAQC survey
+  
+* This is a required field
+  
+* NA/NA is a MISMATCH
+
+&nbsp;
+  
+**Tree vigor summary**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+TreeVigor_df <- QAQCTreesOut[["Vigor"]][["FinalDat_df"]]
+TreeVigorSummary <- t(table(TreeVigor_df$Match))
+row.names(TreeVigorSummary)<- "Match?"
+kable(TreeVigorSummary)
+```
+  
+**Tree vigor PSA**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["Vigor"]][["PSA_df"]])
+```
+  
+**Tree vigor PSA plot**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotPSA(PSA_df = QAQCTreesOut[["Vigor"]][["PSA_df"]], xlabel = "Tree Vigor")
+```
+  
+\newpage
+
+```{r fig.width=7, fig.height=7, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncColMat(QAQC_df = QAQCTreesOut[["Vigor"]][["FinalDat_df"]][, c("Value1", "Value2")], categ_vec = 1:5, upper_only = TRUE, title_add = "QAQC Evaluation - Tree Vigor")
+```
+
+\newpage
+  
+### TREE DIEBACK
+  
+Data Notes:
+    
+* The % classes are (1) 0-10, (2) 10-25, (3) 25-50, (4) 50-75, (5) 75-100%)
+
+* Only use trees with Status=1 in both QAQC and non-QAQC survey
+
+* This is NOT a required field
+
+* NA/NA are not considered in analysis
+
+&nbsp;
+
+**Tree dieback summary**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+TreeDieback_df <- QAQCTreesOut[["Dieback"]][["FinalDat_df"]]
+TreeDiebackSummary <- t(table(TreeDieback_df$Match))
+row.names(TreeDiebackSummary)<- "Match?"
+kable(TreeDiebackSummary)
+```
+  
+**Tree dieback PSA**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["Dieback"]][["PSA_df"]])
+```
+  
+**Tree dieback PSA plot**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotPSA(PSA_df = QAQCTreesOut[["Dieback"]][["PSA_df"]], xlabel = "Tree Dieback")
+```
+
+\newpage
+
+```{r fig.width=7, fig.height=7, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncColMat(QAQC_df = QAQCTreesOut[["Dieback"]][["FinalDat_df"]][, c("Value1", "Value2")], categ_vec = 1:5, upper_only = TRUE, title_add = "QAQC Evaluation - Tree Dieback")
+```
+
+\newpage 
+
+### SNAG DECAY
+
+Data Notes:
+  
+* Categories are 1 - 5, with larger number meaning more decay
+
+* Only use trees with Status=2 in both QAQC and non-QAQC survey
+
+* This is a required field
+
+* NA/NA is a MISMATCH
+
+&nbsp;
+
+**Snag decay summary**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+SnagDecay_df <- QAQCTreesOut[["SnagDecay"]][["FinalDat_df"]]
+SnagDecaySummary <- t(table(SnagDecay_df$Match))
+row.names(SnagDecaySummary)<- "Match?"
+kable(SnagDecaySummary)
+```
+
+**Snag decay PSA**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["SnagDecay"]][["PSA_df"]])
+```
+
+**Snag decay PSA plot**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotPSA(PSA_df = QAQCTreesOut[["SnagDecay"]][["PSA_df"]], xlabel = "Snag Decay")
+```
+
+\newpage
+
+```{r fig.width=7, fig.height=7, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncColMat(QAQC_df = QAQCTreesOut[["SnagDecay"]][["FinalDat_df"]][, c("Value1", "Value2")], categ_vec = 1:5, upper_only = TRUE, title_add = "QAQC Evaluation - Snag Decay")
+```
+
+\newpage
+
+### FOLIAGE CONDITION
+
+Data Notes:
+  
+* This is NOT a required field
+
+* Only use trees with Status=1 in both QAQC and non-QAQC survey
+
+* NA/NA is neither a MATCH nor a MISMATCH, it is simply tabulated separately
+
+&nbsp;
+
+**Foliage condition summary**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["FoliageCond_list"]][["FCSummary_tab"]])
+```
+
+\newpage
+
+**Foliage condition PSA: C**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_list"]][["C"]])
+```
+
+**Foliage condition PSA plot: C**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_plotlist"]][["C"]]
+```
+
+\newpage
+
+**Foliage condition PSA: H**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_list"]][["H"]])
+```
+
+**Foliage condition PSA plot: H**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_plotlist"]][["H"]]
+```
+
+\newpage
+
+**Foliage condition PSA: L**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_list"]][["L"]])
+```
+
+**Foliage condition PSA plot: L**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_plotlist"]][["L"]]
+```
+
+\newpage
+
+**Foliage condition PSA: N**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_list"]][["N"]])
+```
+
+**Foliage condition PSA plot: N**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_plotlist"]][["N"]]
+```
+
+\newpage
+
+**Foliage condition PSA: O**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_list"]][["O"]])
+```
+
+**Foliage condition PSA plot: O**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_plotlist"]][["O"]]
+```
+
+\newpage
+
+**Foliage condition PSA: W**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_list"]][["W"]])
+```
+
+**Foliage condition PSA plot: W**
+```{r fig.width=5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut[["FoliageCond_list"]][["FC_PSA_plotlist"]][["W"]]
+```
+
+\newpage
+
+### TREE CONDITION
+
+Data Notes:
+
+* This is NOT a required field
+
+* Only use trees with Status=1 in both QAQC and non-QAQC survey
+
+* NA/NA is neither a MATCH nor a MISMATCH, it is simply tabulated separately
+
+* Sometimes the same Arborist evaluates a plot in both QAQC and non-QAQC survey
+
+&nbsp;
+
+**Tree condition summary & PSA**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["TreeCond_list"]][["TreeCondPSASummary_df"]])
+```
+
+\newpage
+
+**Tree condition PSA plot**
+```{r fig.width=7.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut[["TreeCond_list"]][["TreeCondPSA_plot"]]
+```
+
+**Number of survey-trees evaluated per Arborist**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["TreeCond_list"]][["TreeCondArbN_df"]])
+```
+
+\newpage
+
+**Tree condition by Arborist**
+*Numerator in calculation is number of times that Arborist X called TRUE on Condition Y for a tree. Denominator is number of times someone (the Arborist or the paired surveyor) called TRUE on Condition Y for a tree evaluated by Arborist X. Denominator is shown next to each point. Each facet cell represents a different tree condition.*
+```{r fig.width=7.5, fig.height=6.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+(QAQCTreesOut[["TreeCond_list"]][["TreeCondArb_df"]])
+
+TreeCondArb_plotlist <- list()
+for(s in seq(from = 1, to = floor(length(QAQCTreesOut[["TreeCond_list"]][["all_DC"]])/4)*4, by = 4)) {
+  which_DC = QAQCTreesOut[["TreeCond_list"]][["all_DC"]][c(s, s+1, s+2, s+3)]
+  print(ggplot(data = subset(QAQCTreesOut[["TreeCond_list"]][["TreeCondArb_df"]], DC %in% which_DC), aes(x = Arborist,  y = percentTRUE)) +
+    geom_point(na.rm = TRUE) +
+    geom_text(aes(label = ArbDenom),hjust = -0.5, vjust = 0.3, size = 3, na.rm = TRUE) +
+    ylim(0, 100) +
+    labs(y ="Proportion of specific TRUE (%)", x ="Disturbance Condition") +
+    theme_bw(base_size = 10) +
+    theme(axis.text.x = element_text(angle=90,hjust=1)) +
+    facet_wrap(~DC, ncol = 2))
+}
+```
+
+\newpage
+## COUNT / CONTINUOUS VARIABLES
+### TREE DBH
+
+Data Notes:
+
+* This is a required field for live (status 1) and standing dead (status 2) trees
+
+* Collected on trees with DBH > 10
+
+* Only used trees for which a DBH was recorded in both surveys
+
+* Summary excludes data records in which no DBH is recorded
+
+&nbsp;
+
+**Frequency table for absolute differences in tree DBH**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["DBH"]][["Diff_tab"]])
+```
+
+**Histogram of tree DBH differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[["DBH"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["DBH"]][["plot_vals"]])
+```
+
+\newpage
+
+**Tree DBH absolute differences, empirical cumulative distribution function**
+
+*Vertical red lines at 0 & 1*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCTreesOut[["DBH"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for difference in tree DBH", ylab="Proportion of trees", xlab="Absolute difference in DBH", cex.lab=1, cex.main=1)
+abline(v=0, col="red", lty="dashed")
+abline(v=1, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for tree DBH**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[["DBH"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["DBH"]][["plot_vals"]])
+```
+
+\newpage
+
+### CANOPY COVER, AVERAGED BY PLOT-YEAR
+
+Data Notes:
+
+* Densiometer counts range from 0 to 96. For each plot-year, the average of 16 densiometer counts (taken from N, E, S, W directions for each of four modules) is used as the canopy cover for that plot-year
+
+* Plot-year differences are measured on densiometer averages (not converted to %)
+
+&nbsp;
+
+**Frequency table for absolute differences in densiometer averages by plot-year**
+*Difference categories should be read as, e.g., (0,1] = the difference is greater than 0 and less than or equal to 1*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["CanopyPlotCounts"]][["Diff_tab"]], col.names=c("Difference Category", "Freq"))
+```
+
+**Histogram of differences in densiometer averages by plot-year**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[["CanopyPlotCounts"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["CanopyPlotCounts"]][["plot_vals"]], alt_xlab = "Difference between surveys, q - n")
+```
+
+\newpage
+
+**Absolute differences in densiometer averages by plot-year, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCTreesOut[["CanopyPlotCounts"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for difference in densiometer averages", ylab="Proportion of plot-years", xlab="Absolute difference in densiometer averages", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for densiometer averages by plot-year**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[["CanopyPlotCounts"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["CanopyPlotCounts"]][["plot_vals"]], alt_ylab = "Difference between surveys, q - n")
+```
+
+\newpage
+
+### CANOPY COVER, AVERAGED BY MODULE-YEAR
+
+Data Notes:
+
+* Densiometer counts range from 0 to 96. For each module-year, the average of four densiometer counts (taken from N, E, S, W directions) is used as the canopy cover for that module-year
+
+* Module-year differences are measured on densiometer averages (not converted to %)
+
+&nbsp;
+
+**Frequency table for absolute differences in densiometer averages by module-year**
+*Difference categories should be read as, e.g., (0,1] = the difference is greater than 0 and less than or equal to 1*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["CanopyModCounts"]][["Diff_tab"]], col.names=c("Difference Category", "Freq"))
+```
+
+**Histogram of differences in densiometer averages by module-year**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[["CanopyModCounts"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["CanopyModCounts"]][["plot_vals"]], alt_xlab = "Difference between surveys, q - n")
+```
+
+\newpage
+
+**Absolute differences in densiometer averages by module-year, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCTreesOut[["CanopyModCounts"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for difference in densiometer averages", ylab="Proportion of module-years", xlab="Absolute difference in densiometer averages", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for densiometer averages by module-year**
+
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[["CanopyModCounts"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["CanopyModCounts"]][["plot_vals"]], alt_ylab = "Difference between surveys, q - n")
+```
+
+\newpage
+
+### SNAG HEIGHT
+
+Data Notes:
+
+* This is a required field for standing dead (status 2) trees
+
+* Only used trees for which a DBH was recorded in both surveys
+
+* Standing dead trees that did not have a snag height recorded were omitted from analysis
+
+&nbsp;
+
+**Cumulative distribution table for absolute % differences in snag height, (q - n)/mean**
+*Table should be read as, e.g., X% of snags (second column) have an absolute % difference in recorded snag height of Y% or less (first column).*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["SnagHeight"]][["Diff_tab"]], col.names=c("Max. absolute % difference", "Cumulative % of snags"))
+```
+
+\newpage
+
+**Histogram of % differences in snag height, (q - n)/mean**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[["SnagHeight"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["SnagHeight"]][["plot_vals"]])
+```
+
+&nbsp;
+
+**Snag height absolute % differences, empirical cumulative distribution function**
+
+*Vertical red lines at 10% & 20%*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCTreesOut[["SnagHeight"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for % difference in snag height", ylab="Proportion of snags", xlab="% Difference in snag height", cex.lab=1, cex.main=1)
+abline(v=10, col="red", lty="dashed")
+abline(v=20, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for snag height**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[["SnagHeight"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["SnagHeight"]][["plot_vals"]])
+```
+
+\newpage
+
+### SEEDLINGS COUNT: 5_15
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Seed5_15"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+### SEEDLINGS COUNT: 15_30
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Seed15_30"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+### SEEDLINGS COUNT: 30_50
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Seed30_50"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+### SEEDLINGS COUNT: 50_137
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Seed50_137"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+### SAPLINGS COUNT: 0_1
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Sap0_1"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+\newpage
+
+### SAPLINGS 1_2.5
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Sap1_2.5"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+### SAPLINGS 2.5_5
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Sap2.5_5"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+### SAPLINGS 5_10
+
+Data Notes:
+
+* Instances when both surveys recorded count = 0 were considered a match
+
+&nbsp;
+
+**Frequency table for absolute differences**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+i <- "Sap5_10"
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment, "\n")
+cat(attributes(QAQCTreesOut[[i]][["Diff_tab"]])$comment2, "\n")
+kable(QAQCTreesOut[[i]][["Diff_tab"]])
+```
+
+**Histogram of count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in counts, empirical cumulative distribution function**
+
+*Vertical red lines at 1 & 3*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+sub.ecdf <- plot.ecdf(abs(QAQCTreesOut[[i]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = paste0("CDF for difference in count of ", i), ylab="Proportion of module-corners", xlab="Absolute difference in count", cex.lab=1, cex.main=1)
+abline(v=1, col="red", lty="dashed")
+abline(v=3, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for count**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[[i]][["FinalDat_df"]], plot_vals = QAQCTreesOut[[i]][["plot_vals"]])
+```
+
+\newpage
+
+### TREE COUNTS
+
+Data Notes:
+
+* Used data in 'all_trees', regardless of status
+
+* Includes 0-0 counts
+
+&nbsp;
+
+**Frequency table for absolute differences in number of trees**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCTreesOut[["TreeCounts"]][["Diff_tab"]]) # absolute number of trees in each match category
+```
+
+**Histogram of tree count differences**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCTreesOut[["TreeCounts"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["TreeCounts"]][["plot_vals"]])
+```
+
+\newpage
+
+**Tree count absolute differences, empirical cumulative distribution function**
+
+*Vertical red lines at 0 & 1*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCTreesOut[["TreeCounts"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for difference in tree count", ylab="Proportion of trees", xlab="Absolute difference in tree count", cex.lab=1, cex.main=1)
+abline(v=0, col="red", lty="dashed")
+abline(v=1, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for tree counts**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCTreesOut[["TreeCounts"]][["FinalDat_df"]], plot_vals = QAQCTreesOut[["TreeCounts"]][["plot_vals"]])
+```

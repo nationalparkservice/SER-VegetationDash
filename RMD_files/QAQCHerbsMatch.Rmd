@@ -1,0 +1,50 @@
+---
+title: QAQC - HERBS - MATCH LISTS
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+classoption: landscape
+fontsize: 12pt
+geometry: margin=.5in
+mainfont: Cambria
+---
+```{r include=FALSE}
+library(tidyverse)
+library(knitr)
+```
+For each PARK, three lists of species: 1) BOTH SURVEYS = matched species, 2) INITIAL SURVEY ONLY = species detected in initial survey but not QAQC, 3) QAQC SURVEY ONLY = species detected in QAQC survey but not initial. Includes species classified as cover class 1 (trace).
+
+```{r echo = FALSE, results = "asis"}
+TempDat <- readRDS("../Temp_out/QAQCHerbsDat.RDS")
+QAQCHerbsDat <- TempDat[["HerbsBase"]]
+HerbsPlotlev <- QAQCHerbsDat %>%
+  dplyr::select(PlotID, QAQC, PlantName, InPlot) %>%
+  spread(key=QAQC, value=InPlot) # these are all TRUE, so will have to then replace NA's with FALSE
+colnames(HerbsPlotlev)[3:4] <- c("Nsurv", "Qsurv")
+HerbsPlotlev[, c("Nsurv", "Qsurv")][is.na(HerbsPlotlev[, c("Nsurv", "Qsurv")])] <- FALSE
+HerbsPlotlev$MatchTT <- HerbsPlotlev$Nsurv + HerbsPlotlev$Qsurv == 2
+HerbsPlotlev$MatchType <- paste(HerbsPlotlev$Nsurv, HerbsPlotlev$Qsurv, sep="-")
+
+HerbsMatchType_list <- list()
+for (p in levels(HerbsPlotlev$PlotID)) {
+  cat(sprintf("## %s
+              ", p))
+  cat(sprintf("
+**BOTH SURVEYS:  **
+"))
+  cat(as.character(paste0(subset(HerbsPlotlev, PlotID==p & MatchType=="TRUE-TRUE", select="PlantName")$PlantName, " - ")))
+  cat(sprintf("
+
+**INITIAL SURVEY ONLY:  **
+"))
+  cat(as.character(paste0(subset(HerbsPlotlev, PlotID==p & MatchType=="TRUE-FALSE", select="PlantName")$PlantName, " - ")))
+  cat(sprintf("
+
+**QAQC SURVEY ONLY:  **
+"))
+  cat(as.character(paste0(subset(HerbsPlotlev, PlotID==p & MatchType=="FALSE-TRUE", select="PlantName")$PlantName, " - ")))
+  cat(sprintf("
+
+&nbsp;
+
+"))
+}
+```

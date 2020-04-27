@@ -1,0 +1,255 @@
+---
+title: "QAQC - Trees"
+geometry: margin=.5in
+mainfont: Cambria
+output:
+  html_document:
+    df_print: paged
+fontsize: 12pt
+---
+
+```{r include=FALSE}
+library(knitr)
+library(plotrix)
+library(cowplot)
+library(magrittr)
+library(tidyverse)
+library(scales)
+library(here)
+
+QAQCTreesOut <- readRDS(here::here("Temp_out", "QAQCTreesOut.RDS"))
+
+FuncPlotPSA <- function(PSA_df, xlabel) {
+  # Function to create PSA plot
+  # 
+  # Args:
+  #   PSA_df:  Dataframe output from FuncPSA
+  #   xlabel: Text for x-axis label (category)
+  #
+  # Returns:
+  #   PSA point plot with bootstrapped 90% CI's
+  PlotPSA <- ggplot(PSA_df[!is.na(PSA_df$`5%`),], aes(x=Grp,  y=PSA)) +
+    geom_point(na.rm = TRUE) +
+    geom_point(data = PSA_df[is.na(PSA_df$`5%`),], aes(x=Grp, y=PSA), shape=1, na.rm = TRUE) + 
+    geom_linerange(aes(ymin=`5%`, ymax=`95%`), na.rm = TRUE) +
+    ylim(0, 100) +
+    scale_x_discrete(labels=paste0(PSA_df$Grp,"\n(",PSA_df$Denom,")")) +
+    labs(y="Proportion of specific agreement (%)", x=xlabel, subtitle="(If <5 positive detections, point is open circle without a 90% CI)") +
+    theme_bw(base_size = 12)
+  return(PlotPSA)
+}
+
+FuncPlotTreesValDiff_Hist <- function (RT_df, metric_nam) {
+  # Histogram showing difference between standard and QAQC herb richness counts.
+  # 
+  # Args:
+  #   RT_df:  Tree QAQC data frame
+  #   metric_nam:  Name of metric being evaluated
+  # Returns:
+  #   Histogram
+  #
+  RT_df$ValDiff <- RT_df$Qsurv - RT_df$Nsurv
+  HistValDiff_plot <- 
+    ggplot(RT_df, aes(x=ValDiff)) +
+    geom_bar() +
+    scale_x_continuous(breaks= pretty_breaks()) +
+    geom_vline(xintercept=0, col="red") +
+    labs(subtitle="(Positive difference means QAQC value was higher)", x=paste0("Difference in ", metric_nam),  y="Number of paired observations") +
+    theme_bw(base_size = 12)
+  
+  return(HistValDiff_plot)
+}
+
+FuncPlotTreesValDiff_Scatter <- function (RT_df, metric_nam) {
+  # Scatterplot showing difference between standard and QAQC herb richness counts.
+  # 
+  # Args:
+  #   RT_df:  Tree QAQC data frame
+  #   metric_nam:  Name of metric being evaluated
+  # Returns:
+  #   Scatterplot
+  #
+  axesmax <- max(RT_df$Nsurv, RT_df$Qsurv, na.rm = TRUE) + 1
+  countmax <- RT_df %>%
+    dplyr::count(Nsurv, Qsurv) %>%
+    dplyr::top_n(n, n=1) %>%
+    dplyr::select(n)
+  countmax <- as.integer(unlist(countmax))
+  
+  PointsValDiff_plot <-
+    ggplot(RT_df, aes(x=Nsurv, y=Qsurv)) +
+    geom_count() +
+    scale_size_continuous(breaks = seq(1, max(7, countmax), by = round(max(7, countmax)/7)), limits = c(1, max(7, countmax)), range = c(1, 7), name = "# obs") +
+    geom_abline(slope=1, col="red") +
+    xlim(0, axesmax) +
+    ylim(0, axesmax) +
+    coord_fixed() + # preserve the 1:1 aspect
+    labs(x=paste0(metric_nam, " in Standard Survey"), y=paste0(metric_nam, " in QAQC Survey"), subtitle = "(Point size is scaled to the number of\noverlapping observations)") +
+    theme_bw(base_size = 12)
+  
+  return(PointsValDiff_plot)
+}
+
+FuncColMat <- function (QAQC_df, categ_vec, plot_title) {
+  # Function to generate a color matrix of cover category changes. Numbers in cells are frequencies. 
+  # 
+  # Args:
+  #   QAQC_df:  A data frame with two columns of data (called Value1, Value2), one is QAQC category and the other is non-QAQC category. Missing entries should be NA.
+  #   categ_vec:  Vector of categories (groups), sorted
+  # Returns:
+  #   ggplot
+  #
+  QAQC_df[is.na(QAQC_df)] <- "XXX"
+  categ_vec2 <- c(categ_vec, "XXX")
+  QAQC_df[, "Value1"] <- factor(QAQC_df[, "Value1"], levels=categ_vec2)
+  QAQC_df[, "Value2"] <- factor(QAQC_df[, "Value2"], levels=categ_vec2)
+  
+  QAQC_mat <- as.matrix(QAQC_df)
+  QAQC_mat <- t(apply(QAQC_mat,1,sort, decreasing = TRUE)) # For upper triangular, within each row, the smaller number is first
+  QAQC_squaremat <- table(factor(QAQC_mat[,1], levels=categ_vec2), factor(QAQC_mat[,2], categ_vec2))
+  QAQC_final_df <- data.frame(QAQC_squaremat) 
+  QAQC_final_df <- QAQC_final_df[as.integer(QAQC_final_df$Var2) <= as.integer(QAQC_final_df$Var1), ] # get rid of below-diagonal elements
+  
+  plot_ColMat <- 
+    ggplot(QAQC_final_df, aes(x = Var1, y = Var2, fill = log(Freq))) +
+    geom_tile(color = "black") +
+    geom_text(aes(label = Freq), na.rm = TRUE) +
+    scale_fill_gradient(low = "yellow", high = "dodgerblue3", na.value = "white") +
+    scale_x_discrete(position = "top") +
+    scale_y_discrete(limits = rev(categ_vec2)) +
+    labs(title = paste0(plot_title, " (N = ", sum(QAQC_squaremat), ")")) +
+    theme_minimal(base_size = 11) +
+    theme(legend.position = "none",
+          axis.title = element_blank(),
+          panel.grid = element_blank())
+ 
+  return(plot_ColMat)
+}
+```
+
+This page summarizes differences in tree metrics as estimated from QAQC surveys of a plot and the paired standard survey of the same plot. The QAQC and paired standard survey of a plot are conducted within one week of each other.
+
+### SIDEBAR
+**Data to summarize**
+
+An asterisk (\*) after the parameter indicates it is a categorical variable (ordered or unordered). QAQC assessment of categorical variables differs from that for continuous variables.
+
+* Status\* = Required field. Category levels are: 0=tree should be excluded for some reason or can’t be found, 1=live, 2=standing dead, 3=removed by humans, 4=fallen dead. If both survey groups report NA, it is considered a mismatch.
+
+* Crown class\* = Required field. QAQC assessment only considers trees with Status=1 (i.e., live tree) in both QAQC and paired standard survey. Category levels are: 1=open-grown, 2=dominant, 3=co-dominant, 4=intermediate, 5=overtopped. If both survey groups report NA, it is considered a mismatch.
+
+* Dieback\* = NOT a required field. QAQC assessment only considers trees with Status=1 (i.e., live tree) in both QAQC and paired standard survey. Category levels are: 1=0%-10%, 2=10%-25%, 3=25%-50%, 4=50%-75%, 5=75%-100%.
+
+* Snag decay\* = Required field. QAQC assessment only considers trees with Status=2 (i.e., standing dead) in both QAQC and paired standard survey. Category levels are 1 - 5, with larger numbers indicating more decay. If both survey groups report NA, it is considered a mismatch.
+
+* Vigor\* = Required field. QAQC assessment only considers trees with Status=1 (i.e., live tree) in both QAQC and paired standard survey. Category levels are: 1=healthy, 2=light decline, 3=moderate decline, 4=severe decline, 5=functionally dead. If both survey groups report NA, it is considered a mismatch.
+
+* Tree DBH = Required field for live (Status=1) and standing dead (Status=2) trees. Collected only on trees with DBH > 10. QAQC assessment only considers trees for which a DBH was recorded in both the QAQC and paired standard survey.
+
+* Seedlings 5-15 count = Required field. Count of live juvenile trees with at least two true leaves and a height from 5 cm tall to <15 cm tall. Instances when both surveys recorded count = 0 are considered a match.
+
+* Seedlings 15-30 count = Required field. Count of live juvenile trees with at least two true leaves and a height from 15 cm tall to <30 cm tall. Instances when both surveys recorded count = 0 are considered a match.
+
+* Seedlings 30-50 count = Required field. Count of live juvenile trees with at least two true leaves and a height from 30 cm tall to <50 cm tall. Instances when both surveys recorded count = 0 are considered a match.
+
+* Seedlings 50-137 count = Required field. Count of live juvenile trees with at least two true leaves and a height from 50 cm tall to <137 cm tall. Instances when both surveys recorded count = 0 are considered a match.
+
+* Saplings 0-1 count = Required field. Count of live juvenile trees that are at least 1.37 m (4.5 feet) tall and with < 1 cm DBH. Saplings are alive if there are any living parts (i.e., leaves, buds, cambium) at or above 1.37 m (breast height). Instances when both surveys recorded count = 0 are considered a match.
+
+* Saplings 1-2.5 count = Required field. Count of live juvenile trees that are at least 1.37 m (4.5 feet) tall and with DBH from 1 cm to < 2.5 cm. Saplings are alive if there are any living parts (i.e., leaves, buds, cambium) at or above 1.37 m (breast height). Instances when both surveys recorded count = 0 are considered a match.
+
+* Saplings 2.5-5 count = Required field. Count of live juvenile trees that are at least 1.37 m (4.5 feet) tall and with DBH from 2.5 cm to < 5 cm. Saplings are alive if there are any living parts (i.e., leaves, buds, cambium) at or above 1.37 m (breast height). Instances when both surveys recorded count = 0 are considered a match.
+
+* Saplings 5-10 count = Required field. Count of live juvenile trees that are at least 1.37 m (4.5 feet) tall and with DBH from 5 cm to < 10 cm. Saplings are alive if there are any living parts (i.e., leaves, buds, cambium) at or above 1.37 m (breast height). Instances when both surveys recorded count = 0 are considered a match.
+
+* Trees count = Required field. Includes all trees, regardless of status (live, dead...). Instances when both surveys recorded count = 0 are considered a match.
+
+&nbsp;
+
+### GRAPHS AND TABLES
+The examples on this page show results for tree vigor (as an example of how QAQC for all the categorical variables are summarized) and tree DBH (as an example of how QAQC for all the continuous variables are summarized). 
+
+#### Summaries of categorical variables (Example: Tree vigor)
+
+**Proportion of Specific Agreement for Tree Vigor (top left)**
+
+For each of the five levels of tree vigor, proportion of specific agreement (PSA) answers the question "If a tree is assigned vigor level 'i' by one surveyor (randomly selected from the two surveyors), then what is the probability that the other surveyor assigns it the same vigor level 'i'? PSA differs from proportion of overall agreement (POA = the proportion of cases for which both surveyors agree on vigor level) in that PSA is calculated separately for each vigor level and accounts for the rarity or preponderence of that vigor level. When a vigor level is rare or very common, POA tends to overestimate (bias high--due to chance alone) the estimated agreement between the surveyors. For this reason, PSA is considered a less biased metric of agreement than is POA.
+
+PSA is calculated as:
+
+$$P_{s}(i) = \frac{2n{_{ii}}}{n_{i.} + n_{.i}}$$
+
+$P_{s}(i)$ = Proportion of specific agreement for category level 'i'
+$n_{ii}$ = Number of times both surveyors assigned category level 'i' to a tree
+$n_{i.}$ = Number of times surveyor #1 assigned category level 'i' to a tree
+$n_{.i}$ = Number of times surveyor #2 assigned category level 'i' to a tree
+
+In the PSA plot, vigor levels are shown on the X axis. The level 'XXX' means no value was entered in the datasheet (i.e., NA - missing value). The number in parentheses next to each vigor level is the number of times a surveyor (either of the two) recorded that vigor level for a tree--this value is the denominator in the PSA equation. The y-axis shows the PSA for the vigor level. If there are at least five positive detections (denominator is 5 or greater--a rather arbitrary cutoff) for the vigor level, a 90% bootstrapped confidence interval for the PSA is calculated and is shown as a vertical black line on the PSA plot. If there are fewer than five positive detections, the point is shown as an open circle and no confidence interval is calculated.
+
+In the example below, we see that for vigor level = 5 (functionally dead), PSA = 2/3 = 66.66%. Both surveyors assigned vigor level = 5 to one tree (so PSA numerator = 2 $\times$ 1 = 2) and one surveyor (but not the other) assigned vigor level = 5 to another tree (so PSA denominator = 1 + 2 = 3). Since there are only three positive detections for this vigor level, a confidence interval is not calculated and the point is shown as an open circle.
+
+&nbsp;
+
+```{r fig.width=5.5, fig.height=4.25, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotPSA(PSA_df = QAQCTreesOut$Vigor$PSA_df, xlabel = "Vigor")
+```
+
+&nbsp;
+
+**Interrater Agreement Matrix for Tree Vigor (top right)**
+
+This color-coded matrix shows the counts of matches (along diagonal) and mismatches (off-diagonal) for each vigor level. Values are not shown below the diagonal because these values would be a mirror image of values above the diagonal. Cells are colored from yellow (low values) to blue (high values). In the example below, we see that vigor was QAQC'ed for N = 453 trees. For 302 trees, both surveyors scored the tree with vigor level = 1. For 104 trees, one surveyor scored the tree with vigor level = 1 and the other surveyor scored it with vigor level = 2 (therefore, a mismatch in the assigned vigor level). The values in this matrix can be used to calculate the PSA scores shown in the PSA plot (top left). For example, the color matrix shows that for vigor level = 5 (functionally dead), surveyors provided the same score for one tree (i.e., both surveyors assigned the tree a vigor level = 5). For another tree, one surveyor scored it vigor level = 5 and the other surveyor scored it vigor level = 1 (healthy). Thus, there were a total of three positive detections of vigor level = 5 and two of those detections were a match (both surveyors assigned this vigor level to the same tree).
+
+&nbsp;
+
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncColMat(QAQC_df = QAQCTreesOut$Vigor$FinalDat_df[, c("Value1", "Value2")], categ_vec = QAQCTreesOut$Vigor$categ_vec, plot_title = "QAQC Evaluation - Vigor")
+```
+
+#### Summaries of continuous variables (Example: Tree DBH)
+
+**Histogram of Difference in Tree DBH Estimates (top left)**
+
+This histogram shows the difference in tree DBH recorded in the QAQC survey compared to the paired standard survey. Ideally, the histogram should be symmetric and cluster tightly around the vertical red line. 
+
+In the example below, we see that for most trees the QAQC and paired standard survey estimates of DBH were within one centimeter of each other. For one tree, the estimated DBH was 7 cm smaller in the QAQC survey than in the paired standard survey.
+
+&nbsp;
+
+```{r fig.width=5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotTreesValDiff_Hist(RT_df = QAQCTreesOut$DBH$FinalDat_df, metric_nam =  QAQCTreesOut$DBH$plot_vals$metric_nam)
+```
+
+&nbsp;
+
+**Scatterplot of Difference in Tree DBH Estimates (top right)**
+
+This scatterplot presents the histogram data in a different format. For each point in the scatterplot, the x-value is the estimated DBH in a standard survey and the y-value is the estimated DBH in the paired QAQC survey of the same tree. Because points may overlap and obscure each other, the size of the point indicates the number of trees (observations) represented by that point. Ideally, the points should be symmetric around and lie close to the red diagonal line.
+
+&nbsp;
+
+```{r fig.width=5, fig.height=5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotTreesValDiff_Scatter(RT_df = QAQCTreesOut$DBH$FinalDat_df, metric_nam =  QAQCTreesOut$DBH$plot_vals$metric_nam)
+```
+
+&nbsp;
+
+**Table of Cumulative Distribution Function (bottom left)**
+
+This table presents the data corresponding to the cumulative distribution function (CDF) graph on the bottom right of the page. In the example below, we see that for 98.1% of trees with both a QAQC and paired standard survey, the difference in DBH estimate (between QAQC and standard survey) was within one centimeter. The actual number of trees represented by the 98.1% CDF is 516 (407 + 109).
+
+```{r echo = FALSE}
+kable(QAQCTreesOut$DBH$Diff_tab, align = "c")
+```
+
+&nbsp;
+
+**Graph of Cumulative Distribution Function (bottom right)**
+
+This graph shows the data from the CDF table as a visual.
+
+&nbsp;
+
+```{r fig.width=5, fig.height=5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCTreesOut$DBH$ECDF_plot
+```

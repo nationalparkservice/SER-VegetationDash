@@ -1,0 +1,280 @@
+---
+title: "QAQC - SITES"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+fontsize: 12pt
+output:
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+mainfont: Cambria
+geometry: margin=.5in
+classoption: portrait
+---
+```{r include=FALSE}
+library(knitr)
+library(tidyverse)
+library(scales)
+
+QAQCSitesOut <- readRDS("../Temp_out/QAQCSitesOut.RDS")
+
+FuncPlotPSA <- function(PSA_df, xlabel) {
+  # Function to create PSA plot
+  # 
+  # Args:
+  #   PSA_df:  Dataframe output from FuncPSA
+  #   xlabel: Text for x-axis label (category)
+  #
+  # Returns:
+  #   PSA point plot with bootstrapped 90% CI's, from within function
+  ggplot(PSA_df, aes(x=Grp,  y=PSA)) +
+    geom_point(na.rm = TRUE) +
+    geom_linerange(aes(ymin=`5%`, ymax=`95%`), na.rm = TRUE) +
+    ylim(0, 100) +
+    scale_x_discrete(labels=paste0(PSA_df$Grp,"\n(",PSA_df$Denom,")")) +
+    labs(y="Proportion of specific agreement (%)", x=xlabel, subtitle="(90% CI included only if 5 or more positive detections)") +
+    theme_bw(base_size = 10)
+}
+
+FuncBarHist <- function (dat, plot_vals, alt_xlab = NA) {
+  # Function to generate a histogram of count/continuous data differences between QAQC and non-QAQC surveys 
+  # 
+  # Args:
+  #   dat:  Dataframe of data
+  #   plot_vals:  Vector of plot values
+  #   alt_xlab:  Alternative text for the x-axis label
+  #
+  # Returns:
+  #   Generates a bar plot or histogram from within function
+  #
+  p <- ggplot(data = dat, aes(x = Metric)) +
+  scale_x_continuous(limits = c(-1,1)*plot_vals$range_max, breaks = seq(-1*plot_vals$range_max, plot_vals$range_max, by = plot_vals$range_int)) +
+  theme_bw(base_size = 12)
+  
+  if (plot_vals$type == "discrete") { # if count data, return a bar plot
+    p + geom_bar(fill = "white", color = "black", na.rm = TRUE) +
+      geom_vline(xintercept = 0, col = "red") +
+      labs(x = ifelse(is.na(alt_xlab), "Difference between surveys, q - n", alt_xlab), y = "Count")
+  } else {
+    p + geom_histogram(fill = "white", color = "black", binwidth = plot_vals$range_int, na.rm = TRUE) +
+      geom_vline(xintercept = 0, col = "red") +
+      labs(x = ifelse(is.na(alt_xlab), "% difference between surveys, (q - n)/mean", alt_xlab), y = "Count")
+  }
+}
+
+FuncBAPlot <- function(dat, plot_vals, alt_ylab = NA) {
+  # Function to generate a Bland-Altman plot 
+  # 
+  # Args:
+  #   dat:  Dataframe of data
+  #   plot_vals:  Vector of plot values
+  #   alt_ylab:  Alternative text for the y-axis label
+  #
+  # Returns:
+  #   Generates a Bland-Altman plot from within function
+  #
+  p <- ggplot(data=dat, aes(x=Mean, y=Metric)) +
+  geom_point(alpha = 0.20, na.rm = TRUE) +
+  stat_smooth(method="loess") +
+  geom_hline(yintercept=quantile(dat$Metric, probs=c(0.025, 0.975)), col="blue", linetype="dashed") +
+  geom_hline(yintercept = 0, col="red") +
+  scale_y_continuous(breaks=pretty_breaks()) +
+  theme_bw(base_size = 12)
+  
+  if (plot_vals$type == "discrete") { # if count data
+    p + labs(x="Survey mean", y = ifelse(is.na(alt_ylab), "Difference between surveys, q - n", alt_ylab), subtitle="(gray shading is 95% CI for loess curve; \ndashed blue lines span 95% of the difference values)")
+    } else { # if continuous
+      p + labs(x="Survey mean", y = ifelse(is.na(alt_ylab), "Difference between surveys, q - n, as % of mean", alt_ylab), subtitle="(gray shading is 95% CI for loess curve; \ndashed blue lines span 95% of the difference values)")
+    }
+}
+
+```
+
+\newpage
+
+### COMMUNITY CODE & COMMUNITY GROUP ASSIGNMENT
+
+Data Notes:
+
+* For each classification, there is also a 'fit', where 1=confident and 2,3=not confident about the classification
+
+* This is a required field
+
+* NA/NA is a MISMATCH
+
+&nbsp;
+
+**Community Code summary**
+*In the row headings, 1 means fit=1; + means fit=2 or 3. In the column headings, FALSE means Community Code (CC) did not match between the two surveys and TRUE means CC did match. The numbers in cells are numberes of QAQC pairs.*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+CG_df <- QAQCSitesOut[["CG_list"]][["GroupSummary"]]
+kable(table(CG_df$FitMatch, CG_df$CCMatch))
+```
+
+**Community Group summary**
+*Same as above, but for Community Group instead of Community Code.*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(table(CG_df$FitMatch, CG_df$CGMatch))
+```
+
+**Community Group PSA**
+*Proportion of specific agreement. For example, for Community Group G031... there were 3 QAQC pairs in which the site was classified as G031 by BOTH the QAQC surveyor and the non-QAQC surveyor (numerator=2 X number of matches for that CG). There were 7 instances total in which a site was classified as G031 by either the QAQC surveyor or the non-QAQC surveyor.*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCSitesOut[["CG_list"]][["CG_PSA_df"]])
+```
+
+**Community Group PSA plot**
+```{r fig.width=7.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotPSA(PSA_df = QAQCSitesOut[["CG_list"]][["CG_PSA_df"]], xlabel = "Community Group")
+```
+
+\newpage
+
+### STAND HEIGHT
+
+Data Notes:
+
+* This metric was added to the protocol late
+
+* NA/NA is OMITTED
+
+* Summary excluded plot-surveys in which only one survey recorded a stand height
+
+&nbsp;
+
+**Cumulative distribution table for absolute % differences in stand height, (q - n)/mean**
+*Table should be read as, e.g., X% of stands (second column) have an absolute % difference in recorded stand height of Y% or less (first column).*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCSitesOut[["StandHeight"]][["Diff_tab"]], col.names=c("Max. absolute % difference", "Cumulative % of stands"))
+```
+
+**Histogram of % differences in stand height, (q - n)/mean**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCSitesOut[["StandHeight"]][["FinalDat_df"]], plot_vals = QAQCSitesOut[["StandHeight"]][["plot_vals"]])
+```
+
+\newpage
+
+**Stand height absolute % differences, empirical cumulative distribution function**
+
+*Vertical red lines at 5% & 10%*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCSitesOut[["StandHeight"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for % difference in stand height", ylab="Proportion of stands", xlab="% Difference in stand height", cex.lab=1, cex.main=1)
+abline(v=5, col="red", lty="dashed")
+abline(v=10, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for stand height**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCSitesOut[["StandHeight"]][["FinalDat_df"]], plot_vals = QAQCSitesOut[["StandHeight"]][["plot_vals"]])
+```
+
+### SITE DISTURBANCE
+
+Data Notes: 
+
+* The datasheet had a checkbox for each disturbance, so this is essentially a required field (unchecked means FALSE; checked means TRUE for each disturbance type)
+
+* NA/NA is a MISMATCH
+
+&nbsp;
+
+**Site disturbance summary & PSA**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCSitesOut[["SiteDisturb_list"]][["SiteDisturbPSASummary_df"]])
+```
+
+**Site disturbance PSA plot**
+```{r fig.width=7.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+QAQCSitesOut[["SiteDisturb_list"]][["SiteDisturbPSA_plot"]]
+```
+
+### COARSE WOODY DEBRIS COUNT BY PLOT
+
+Data Notes:
+
+* If transect information (x or y) is missing, data are used for plot-level counts, but not included for transect-level counts because no information on which transect to assign counts to
+
+**Frequency table for absolute differences in number of CWD by plot**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCSitesOut[["CWDPlotCounts"]][["Diff_tab"]], col.names=c("Difference Category", "Freq"))
+```
+
+**Histogram of differences in CWD counts by plot**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCSitesOut[["CWDPlotCounts"]][["FinalDat_df"]], plot_vals = QAQCSitesOut[["CWDPlotCounts"]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in CWD counts by plot, empirical cumulative distribution function**
+
+*Vertical red lines at 0 & 1*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCSitesOut[["CWDPlotCounts"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for difference in CWD count", ylab="Proportion of plots", xlab="Absolute difference in CWD count", cex.lab=1, cex.main=1)
+abline(v=0, col="red", lty="dashed")
+abline(v=1, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for CWD counts by plot**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCSitesOut[["CWDPlotCounts"]][["FinalDat_df"]], plot_vals = QAQCSitesOut[["CWDPlotCounts"]][["plot_vals"]])
+```
+
+### COARSE WOODY DEBRIS COUNT BY TRANSECT
+
+**Frequency table for absolute differences in number of CWD by transect**
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCSitesOut[["CWDTransectCounts"]][["Diff_tab"]], col.names=c("Difference Category", "Freq"))
+```
+
+**Histogram of differences in CWD counts by transect**
+```{r fig.width=6.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBarHist(dat = QAQCSitesOut[["CWDTransectCounts"]][["FinalDat_df"]], plot_vals = QAQCSitesOut[["CWDTransectCounts"]][["plot_vals"]])
+```
+
+\newpage
+
+**Absolute differences in CWD counts by transect, empirical cumulative distribution function**
+
+*Vertical red lines at 0 & 1*
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+plot.ecdf(abs(QAQCSitesOut[["CWDTransectCounts"]][["FinalDat_df"]][["Metric"]]), col.01line="white", main = "CDF for difference in CWD count", ylab="Proportion of transects", xlab="Absolute difference in CWD count", cex.lab=1, cex.main=1)
+abline(v=0, col="red", lty="dashed")
+abline(v=1, col="red", lty="dashed")
+```
+
+**Bland-Altman plot for CWD counts by transect**
+
+*Darker points represent more data values*
+```{r fig.width=5.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncBAPlot(dat = QAQCSitesOut[["CWDTransectCounts"]][["FinalDat_df"]], plot_vals = QAQCSitesOut[["CWDTransectCounts"]][["plot_vals"]])
+```
+
+**Distribution of decay class**
+
+```{r fig.width=4, fig.height=4, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+CWD <- QAQCSitesOut[["CWDPlotCounts"]][["CWD_orig_df"]]
+CWD$QAQC <- factor(CWD$QAQC, labels=c("Nsurv", "Qsurv"))
+ggplot(CWD) +
+  geom_bar(aes(x = Decay)) +
+  theme_bw(base_size = 10) +
+  labs(x="Decay class", y="Number of CWD") +
+  facet_grid(QAQC ~.)
+```
+
+**Distribution of diameter**
+
+```{r fig.width=4, fig.height=4, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+ggplot(CWD) +
+  geom_histogram(aes(x = Diameter), binwidth = 3) +
+  theme_bw(base_size = 10) +
+  labs(x="Diameter", y ="Number of CWD") +
+  facet_grid(QAQC ~.)
+```

@@ -1,0 +1,209 @@
+---
+title: "QAQC - Herbs"
+geometry: margin=.5in
+mainfont: Cambria
+output:
+  html_document:
+    df_print: paged
+fontsize: 12pt
+---
+
+```{r include=FALSE}
+library(knitr)
+library(ggplot2)
+library(cowplot)
+library(magrittr)
+library(tidyverse)
+
+QAQCHerbsOut <- readRDS("../Temp_out/QAQCHerbsOut.RDS")
+QAQCHerbsDat <- readRDS("../Temp_out/QAQCHerbsDat.RDS")
+
+FuncPlotHerbsRichDiff_Hist <- function (HS_df, ScaleLab) {
+  # Histogram showing difference between standard and QAQC herb richness counts.
+  # 
+  # Args:
+  #   HS_df:  Herb species data frame.
+  #   ScaleLab:  Character string indicating the scale of evaluation (options are "100SqM", "10SqM", "1SqM")
+  # Returns:
+  #   Histogram
+  #
+  HistRichDiff_plot <- 
+    ggplot(HS_df, aes(x=RichDiff)) +
+    geom_bar() +
+    geom_vline(xintercept=0, col="red") +
+    labs(subtitle="(Positive difference means QAQC richness is higher)", x=paste0("Difference in Herb ", ScaleLab, " Richness"),  y=paste0("Number of ", ScaleLab, "-Surveys")) +
+    theme_bw(base_size = 12)
+  
+  return(HistRichDiff_plot)
+}
+
+FuncPlotHerbsRichDiff_Scatter <- function (HS_df, ScaleLab) {
+  # Scatterplot showing difference between standard and QAQC herb richness counts.
+  # 
+  # Args:
+  #   HS_df:  Herb species data frame.
+  #   ScaleLab:  Character string indicating the scale of evaluation (options are "100SqM", "10SqM", "1SqM")
+  # Returns:
+  #   HScatterplot
+  #
+  axesmax <- max(HS_df$NsurvSpp, HS_df$QsurvSpp, na.rm = TRUE) + 1
+  countmax <- HS_df %>%
+    dplyr::count(NsurvSpp, QsurvSpp) %>%
+    dplyr::top_n(n, n=1) %>%
+    dplyr::select(n)
+  countmax <- as.integer(unlist(countmax))
+  
+  PointsRichDiff_plot <-
+    ggplot(HS_df, aes(x=NsurvSpp, y=QsurvSpp)) +
+    geom_count() +
+    scale_size_continuous(breaks = seq(1, max(5, countmax), by = 2), limits = c(1, max(5, countmax)), range = c(1, 5), name = "# obs") +
+    geom_abline(slope=1, col="red") +
+    xlim(0, axesmax) +
+    ylim(0, axesmax) +
+    coord_fixed() + # preserve the 1:1 aspect
+    labs(x=paste0("Herb ", ScaleLab, " Richness in Standard Survey"), y=paste0("Herb ", ScaleLab, " Richness in QAQC Survey"), subtitle = "(Point size is scaled to the number of\noverlapping observations)") +
+    theme_bw(base_size = 12)
+  
+  return(PointsRichDiff_plot)
+}
+
+FuncHerbsCover <- function (Dat_df) {
+  # Function to summarize herb match types. Use only for plot-level analysis, and all species or hicov (not rolled to genus) 
+  # 
+  # Args:
+  #   Dat_df:  A data frame of the cleaned herb data
+  # Returns:
+  #   A list object that can be printed via an .RMD file
+  HerbsCC_df <- Dat_df
+  HerbsCC_df$CC[is.na(HerbsCC_df$CC)] <- 0 # Zero for now
+  HerbsCC_df <- HerbsCC_df %>%
+    select(PlotID, QAQC, PlantName, CC) %>%
+    spread(key=QAQC, value=CC)
+  HerbsCC_df <- HerbsCC_df[complete.cases(HerbsCC_df),]
+  colnames(HerbsCC_df)[3:4] <- c("Nsurv", "Qsurv")
+  HerbsCC_df$Nsurv[HerbsCC_df$Nsurv==0] <- NA # convert back to NA
+  HerbsCC_df$Qsurv[HerbsCC_df$Qsurv==0] <- NA
+  HerbsCC_df$AbsDiff <- abs(HerbsCC_df$Qsurv - HerbsCC_df$Nsurv)
+  HerbsCC_df <- as.data.frame(HerbsCC_df)
+  return(HerbsCC_df)
+}
+
+FuncPlotHerbsRichUnmatched <- function (HM_df, MinDetect, ScaleLab) {
+  # Function to generate a bar plot of proportion of species detections missed in QAQC surveys.
+  # 
+  # Args:
+  #   HM_df:  Herb match data frame.
+  #   MinDetect:  Minimum number of detections for a species to be included
+  #   ScaleLab:  Character string indicating the scale of evaluation (options are "100SqM", "10SqM", "1SqM")
+  # Returns:
+  #   Bar plot
+  #
+  HFspecies <- which(table(HM_df$PlantName) >= MinDetect) # species detected on at least X plot/10SqM/1SqM-surveys
+  HFmissed <- HM_df %>%
+    filter(PlantName %in% names(HFspecies)) %>%
+    group_by(PlantName) %>%
+    dplyr::summarize(Count = n(),
+              AbsMissed = Count - sum(MatchTT),
+              PropMissed = as.integer(round((sum(!MatchTT)/Count) * 100))) %>%
+    dplyr::mutate(PlantName = paste0(PlantName, " (", Count, ")"))
+  
+  BarMissed_plot <- ggplot() +
+    geom_bar(data = subset(HFmissed, PropMissed > 50), aes(x=reorder(PlantName, -PropMissed), y = PropMissed), width=.5, stat="identity") +
+    theme_bw(base_size=10) +
+    ylim(0, 100) +
+    geom_hline(yintercept=50, color="red") +
+    labs(y="Proportion of Detections Unmatched (%)", x="Species", title= paste0("Proportion of ", ScaleLab, "Survey Detections Unmatched"), subtitle=paste0("(Species with at least ", MinDetect, " detections and >50% unmatched)")) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5)) +
+    theme(plot.title = element_text(size=10), legend.title = element_blank())
+  
+  return(BarMissed_plot)
+}
+```
+
+This page summarizes differences in herb richness as estimated from QAQC surveys of a plot and the paired standard survey of the same plot. The QAQC and paired standard survey of a plot are conducted within one week of each other. Native herbs are not distinguished from non-native herbs in these summaries.
+
+### SIDEBAR
+**Data to summarize**
+
+* All species = Includes all herb species detected
+
+* High cover species only = Includes only herb species classified as Cover Class 2 or higher (i.e., 0.1% - 100%) in either the standard or the paired QAQC survey of a plot
+
+* All species, some rolled to genus = Within some genera, herb species are commonly misidentified at the species level. Species in these genera are reclassified to genus level prior to estimating herb richness for the plot. These genera are (roughly in order from most commonly misidentified to less): Viola, Vitis, Celtis, Carya, Carex, Sanicula, Agrimonia, Ulmus, Smilax, Dichanthelium, Quercus, Potentilla, Elephantopus, Rubus, Desmodium, Galium. All other species are identified to species level.
+
+**Sampling scale**
+
+Within a survey plot, herb species richness is estimated at three sampling scales. A single survey plot includes:
+
+* Four 10m X 10m (= 100sq.m.) subplots
+
+* Eight 3.16m X 3.16m (= 10sq.m.) subplots
+
+* Eight 1m X 1m (= 1sq.m.) subplots
+
+### GRAPHS AND TABLES
+The examples on this page show results for herb richness estimated from 100sq.m. subplots. 
+
+**Histogram of Difference in Herb Richness Estimate (top left)**
+
+This histogram shows the difference in number of herb species recorded in the QAQC survey compared to the paired standard survey. For example, summed across the four 100m`^2^` subplots, if 20 herb species were detected in the QAQC survey of Plot A in 2013 and 17 herb species were detected in the paired standard survey of Plot A in 2013, then the difference in estimated herb richess is 3. Ideally, the histogram should be symmetric and cluster tightly around the vertical red line. 
+
+In the example below, we see that in six cases (the highest histogram bar), the QAQC survey of a plot detected four fewer herb species than did the paired standard survey of the plot; in one case, both surveys detected the same number of herb species at a plot.
+
+&nbsp;
+
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsPlotSummary <- QAQCHerbsOut$HS100SqM_list[["HerbsBase"]]
+kable(summary(HerbsPlotSummary[c("NsurvSpp", "QsurvSpp", "PSturn", "PercRichDiff", "UniqueSpp", "MatchTrue", "MatchByMean", "MatchByUnique")]))
+FuncPlotHerbsRichDiff_Hist(HS_df = HerbsPlotSummary, ScaleLab = "100SqM")
+```
+
+&nbsp;
+
+**Scatterplot of Difference in Herb Richness Estimates (top right)**
+
+This scatterplot presents the histogram data in a different format. For each point in the scatterplot, the x-value is the number of herb species detected in a standard survey and the y-value is the number detected in the paired QAQC survey. Because points may overlap so obscure each other, the size of the point indicates the number of plot-surveys represented by that point. For example, summed across the four 100m`^2^` subplots, if 20 herb species were detected in the QAQC survey of Plot A in 2013 and 17 herb species were detected in the paired standard survey of Plot A in 2013, then we would see a point at [x=17, y=20]. Ideally, the points should be symmetric around and lie close to the red diagonal line.
+
+In the example below, we see that in one case (the point at the top right corner of the graph), just over 100 herb species were detected in both the QAQC survey and the paired standard survey of a plot. The point is very close to the red line, so the two surveys had very similar estimates of species richness.
+
+&nbsp;
+
+```{r fig.width=4.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotHerbsRichDiff_Scatter(HS_df = HerbsPlotSummary, ScaleLab = "100SqM")
+```
+
+&nbsp;
+
+**Table of Cumulative Distribution Function (middle left)**
+
+This table presents the data corresponding to the cumulative distribution function (CDF) graph on the bottom right of the page. In the example below, we see that in 50% of plot-surveys with both a QAQC and paired standard survey, the estimates of herb richness (between QAQC and standard survey) differed three or fewer species. The actual number of plot-surveys represented by the 50% CDF is 18 (1 + 4 + 5 + 8). In 75% of plot-surveys with both a QAQC and paired standard survey, the estimates of herb richness differed by five or fewer species.
+
+```{r echo = FALSE}
+kable(QAQCHerbsOut[["HS100SqMTable_list"]][["HerbsBase"]], align = "c")
+```
+
+&nbsp;
+
+**Graph of Cumulative Distribution Function (middle right)**
+
+This graph shows the data from the CDF table as a visual.
+
+&nbsp;
+
+```{r fig.width=4, fig.height=4, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsDat <- QAQCHerbsDat[["HerbsBase"]]
+HerbsCC_df <- FuncHerbsCover(HerbsDat)
+plot.ecdf(HerbsCC_df$AbsDiff, col.01line="white", main = "CDF for difference in herb CC", ylab="Proportion of species-plot-surveys", xlab="Absolute difference in CC", cex.lab=1, cex.main=1)
+```
+
+&nbsp;
+
+**Bar Plot of Unmatched Species Detections (bottom)**
+
+From left to right, this plot shows which species were most frequently detected in one survey (either QAQC or standard survey) and missed in the paired survey, as a proportion of the total cases the species was detected in at least one of the paired surveys. In the example below, we see that in six cases, the herb species coded as DESMCANE was detected in at least one of the paired QAQC-standard surveys ('6' is indicated in parentheses next to the species code on the x-axis). In all six cases (100% of the time, indicated by the height of the bar), this species was not detected in the paired survey of that same plot. It's possible the mismatch was sometimes due to misidentification rather than non-detection. We only know that the species was recorded in the plot by one survey team, and not recorded in the paired survey of that same plot. The example graph shows all species detected in at least five paired surveys and missed by one of the paired surveys at least 50% of the time.  
+
+&nbsp;
+
+```{r fig.width=6.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+FuncPlotHerbsRichUnmatched(HM_df = QAQCHerbsOut$HM100SqM_list[["HerbsBase"]], MinDetect = 5, ScaleLab = "100SqM")
+```

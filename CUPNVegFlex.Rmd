@@ -1,0 +1,896 @@
+---
+title: "CUPN VEGETATION"
+output:
+  flexdashboard::flex_dashboard:
+    vertical_layout: scroll
+    orientation: columns
+runtime: shiny
+---
+
+```{r global, include=FALSE}
+rm(list=ls())
+# STILL TO DO ---
+# REPORTS GENERATING PDF'S --have them use new colmat & here::here
+# Pop-up note that in Word doc, need to right-click the Table of Contents and update
+
+
+
+### Load libraries -----
+# Will automatically install any libraries it can't find
+packages <- c("flexdashboard", "shiny", "knitr", "tidyverse", "magrittr", "lubridate", "gridExtra", "scales", "shinyWidgets", "plotly", "leaflet", "RgoogleMaps", "shinyBS", "plotrix", "shinyjs", "here")
+package.check <- lapply(packages, FUN = function(x) {
+  if (!require(x, character.only = TRUE)) {
+    install.packages(x, dependencies = TRUE, repos = "http://cran.us.r-project.org")
+    library(x, character.only = TRUE)
+  }
+})
+
+options(shiny.maxRequestSize = 20*1024^2) # allows data files up to 20 MB to be imported
+
+source(here::here("CUPNVegFlex.R")) # executes the source script, loads functions that will be used by the dashboard
+Out_list <- reactiveValues(CUPNbounds = NULL, MapDat = NULL, OakHick = NULL, OakHickDat = NULL, QAQCHerbs = NULL, QAQCTrees = NULL, QAQCSites = NULL, Thresholds = NULL, SelOptions = NULL, ThreshList = NULL, ThreshTable = NULL) # alternative should be NA, not NULL
+```
+
+Main
+======================================
+Column {data-width=300}
+-------------------------------------
+#### <font size="5">Instructions for processing raw data files</font>
+
+<font size="4">1. Put the raw data files as CSV files in the 'Data_in' folder of the Dashboard working directory. Valid file names are (case-sensitive): Herbs.csv, ...
+
+2. Click the 'IMPORT AND PROCESS NEW DATA' button to import all CSV files that are in the 'Data_in' folder. When data processing is complete, you can navigate to the other tabs in the Dashboard to see summary graphs.
+
+3. When data processing is complete, you can select reports to generate by clicking the 'CREATE REPORTS' button. Reports will be saved in the 'Reports_out' folder.</font>
+
+#### <font size="5">Instructions for using this dashboard</font>
+<font size="4">On each page of the dashboard, click the 'ABOUT THIS PAGE' button to open a pdf document with information on user options and an explanation of the summary information presented on that page.</font>
+
+Column {data-width=250}
+-------------------------------------
+### Select Reports to Create
+
+```{r genrpts_QAQC}
+checkboxGroupInput("sel_OakHickRpts", 
+                   label = "OAK-HICKORY REGENERATION REPORTS", 
+                   choiceNames = list("Sustainability index", "Importance values", "Sander threshold"), 
+                   choiceValues = list("OakHickOSI", "OakHickImport", "OakHickSander"),
+                   selected = NULL)
+bsPopover(id = "sel_OakHickRpts", title = "Oak-Hickory Regeneration Reports", content = "These reports summarize oak-hickory regeneration potential in plots that are currently classified as oak-hickory plots. A separate report is created for each of three regeneration metrics. With all three metrics, higher values mean the plot is more likely to maintain a dominant canopy of oak and hickory species into the near future, based on the current density of oak and hickory seedlings and saplings.", placement = "left", options = list(container = "body"))
+
+checkboxGroupInput("sel_QAQCRpts", 
+                   label = "QAQC REPORTS", 
+                   choiceNames = list("Sites", "Trees", "Herbs (base)", "Herbs (high cover only)", "Herbs (rolled to genus)", "Herbs - matchlist"), 
+                   choiceValues = list("QAQCSites", "QAQCTrees", "QAQCHerbsBase", "QAQCHerbsHiCov", "QAQCHerbsRolled", "QAQCHerbsMatch"),
+                   selected = NULL)
+bsPopover(id = "sel_QAQCRpts", title = "QAQC Reports", content = "These reports summarize repeatability in estimates of vegetation field metrics. In each survey year at each park, a subset of plots are re-surveyed within one week of the original plot survey. QAQC reports summarize measurement variability for each metric, e.g., differences in classification of herb cover class between two survey teams.", placement = "left", options = list(container = "body"))
+
+# STILL NEED TO DO THIS ONE BELOW
+checkboxGroupInput("sel_Maps", 
+                   label = "MAPS",
+                   choiceNames = list("Native herb richness", "Exotic herb richness"),
+                   choiceValues = list("NativeRichMap", "ExoticRichMap"),
+                   selected = NULL)
+bsPopover(id = "sel_Maps", title = "MAPS", content = "These reports show the distribution of the selected metric (e.g., native herb richness) across a park, with each survey site colored according to its scorecard category for that metric.", placement = "left", options = list(container = "body"))
+```
+
+Column {data-width=190}
+-------------------------------------
+```{r import}
+actionButton("button_import", "IMPORT AND PROCESS NEW DATA", width = "250px")
+
+br()
+br()
+
+actionButton("button_load", "LOAD EXISTING SUMMARY FILES", width = "250px")
+
+br()
+br()
+
+radioButtons("sel_rptformat", 
+             label = "Select report format:", 
+             choiceNames = list(".doc", ".pdf"),
+             choiceValues = list("word_document", "pdf_document"),
+             selected = "word_document",
+             inline = TRUE)
+actionButton("button_rpts", "CREATE REPORTS", width = "250px")
+```
+
+```{r logos, echo = FALSE, out.width="60%"}
+br()
+
+htmltools::img(src="logos/NPSorig.png", width = "28%", style="display: block; margin-left: auto; margin-right: auto")
+```
+
+```{r logos2, echo = FALSE, out.width="100%"}
+htmltools::img(src="logos/NSorig.png", width = "79%", style="display: block; margin-left: auto; margin-right: auto")
+```
+
+```{r load_data}
+# Load Summary Files
+observeEvent(eventExpr = input$button_load, {
+  withProgress(message = "Loading all data...", value = 0, {
+    Sys.sleep(0.25)
+    
+    Out_list$CUPNbounds <- if(file.exists(here::here("Map_files", "CUPNmapbounds.RDS"))) readRDS(here::here("Map_files", "CUPNmapbounds.RDS"))
+    
+    Out_list$SelOptions <- if(file.exists(here::here("Temp_out", "sel_options.RDS"))) readRDS(here::here("Temp_out", "sel_options.RDS"))
+    
+    Out_list$MapDat <- if(file.exists(here::here("Temp_out", "MapDatOut.RDS"))) readRDS(here::here("Temp_out", "MapDatOut.RDS"))
+  
+  Out_list$OakHick <- if(file.exists(here::here("Temp_out", "OakHickOut.RDS"))) readRDS(here::here("Temp_out", "OakHickOut.RDS"))
+  
+  Out_list$OakHickDat <- if(file.exists(here::here("Temp_out", "OakHickDat.RDS"))) readRDS(here::here("Temp_out", "OakHickDat.RDS"))
+  
+  Out_list$QAQCHerbs <- if(file.exists(here::here("Temp_out", "QAQCHerbsOut.RDS"))) readRDS(here::here("Temp_out", "QAQCHerbsOut.RDS"))
+  
+  Out_list$QAQCTrees <- if(file.exists(here::here("Temp_out", "QAQCTreesOut.RDS"))) readRDS(here::here("Temp_out", "QAQCTreesOut.RDS"))
+  
+  Out_list$QAQCSites <- if(file.exists(here::here("Temp_out", "QAQCSitesOut.RDS"))) readRDS(here::here("Temp_out", "QAQCSitesOut.RDS"))
+  
+  Out_list$ThreshList <- if(file.exists(here::here("Temp_out", "ThreshList.RDS"))) readRDS(here::here("Temp_out", "ThreshList.RDS"))
+  
+  Sys.sleep(0.25)
+  
+  showModal(modalDialog(
+  title = "Done",
+  "You may now generate data reports, or navigate to the other tabs for summary graphs and tables"
+  ))
+  })
+})
+```
+
+```{r import_process_data}
+# Import and Process Data
+observeEvent(eventExpr = input$button_import, {
+  withProgress(message = "Importing and processing data files...", value = 0, {
+    dat_temp = list.files(path = './Data_in', pattern = '*.csv') # identify all .csv files in the Data_in folder
+    map_temp = list.files(path = './Map_files/CUPN_shapefiles', pattern = '*.shp') 
+    shiny::validate(need(length(dat_temp) > 0, "No .csv files in the 'Data_in' folder. Please add the data files and try again."))
+
+    Process_df <- data.frame(rbind(
+    c("VegDat.csv", "Maps"),
+    c("FinalCG.csv", "Maps"),
+    c("OakHickSS.csv", "Maps"),
+    c("OakHickTree.csv", "Maps"),
+    c("BurnPlots.csv", "Maps"),
+    c("CUPN.shp", "Map Boundaries"),
+    c("VegDat.csv", "Oak-Hickory"),
+    c("FinalCG.csv", "Oak-Hickory"),
+    c("OakHickSS.csv", "Oak-Hickory"),
+    c("OakHickTree.csv", "Oak-Hickory"),
+    c("BurnPlots.csv", "Oak-Hickory"),
+    c("Herbs.csv", "QAQC - Herbs"),
+    c("TreesNorm.csv", "QAQC - Trees"),
+    c("TreesQAQC.csv", "QAQC - Trees"),
+    c("AllTrees.csv", "QAQC - Trees"),
+    c("SeedlingsSaplings.csv", "QAQC - Trees"),
+    c("Densiometer.csv", "QAQC - Trees"),
+    c("SiteMetrics.csv", "QAQC - Site"),
+    c("CWD.cvs", "QAQC - Site"), 
+    c("Community.csv", "QAQC - Site"),
+    c("cegl_x_bin.csv", "Thresholds"),
+    c("qry_event_HPExotic_count_byPanelYear.csv", "Thresholds"),
+    c("qry_panel_taxaGroup_seedsapl.csv", "Thresholds"),
+    c("qry_panel_taxaGroup_tree.csv", "Thresholds"),
+    c("qry_snagDensity_event_panel.csv", "Thresholds"),
+    c("qry_stat_cwd_byPanelYear.csv", "Thresholds"),
+    c("qry_tree_eventGrowthMort_panel.csv", "Thresholds")))
+  names(Process_df) <- c("DataRequired", "Analysis")
+  
+  # Map Data Summaries
+  if(all(as.character(Process_df$DataRequired[Process_df$Analysis == "Maps"]) %in% dat_temp)) {
+    incProgress(1/10, detail = " for 'Map Data Summaries'")
+    FuncMapDatMain()
+    Out_list$MapDat <- readRDS(here::here("Temp_out", "MapDatOut.RDS"))
+  }
+  
+  # Map Boundaries
+  if(all(as.character(Process_df$DataRequired[Process_df$Analysis == "Map Boundaries"]) %in% map_temp)) {
+    incProgress(1/10, detail = " for 'Map Boundaries'")
+    FuncMapBounds()
+    Out_list$CUPNbounds <-  readRDS(here::here("Map_files", "CUPNmapbounds.RDS"))
+  }
+  
+  # Oak-Hickory
+  if(all(as.character(Process_df$DataRequired[Process_df$Analysis == "Oak-Hickory"]) %in% dat_temp)) {
+    incProgress(1/10, detail = " for 'Oak-Hickory' report")
+    FuncOakHickMain()
+    Out_list$OakHick <- readRDS(here::here("Temp_out", "OakHickOut.RDS"))
+    Out_list$OakHickDat <- readRDS(here::here("Temp_out", "OakHickDat.RDS"))
+    }
+
+  # QAQC - Sites
+  if(all(as.character(Process_df$DataRequired[Process_df$Analysis == "QAQC - Sites"]) %in% dat_temp)) {
+    incProgress(1/10, detail = " for 'QAQC - Sites' report")
+    FuncQAQCSitesMain()
+    Out_list$QAQCSites <- readRDS(here::here("Temp_out", "QAQCSitesOut.RDS"))
+    }
+  
+    # QAQC - Trees
+  if(all(as.character(Process_df$DataRequired[Process_df$Analysis == "QAQC - Trees"]) %in% dat_temp)) {
+    incProgress(1/10, detail = " for 'QAQC - Trees' report")
+    FuncQAQCTreesMain()
+    Out_list$QAQCTrees <- readRDS(here::here("Temp_out", "QAQCTreesOut.RDS"))
+  }
+  
+  # QAQC - Herbs
+  if(as.character(Process_df$DataRequired[Process_df$Analysis == "QAQC - Herbs"]) %in% dat_temp) {
+    incProgress(1/10, detail = " for 'QAQC - Herbs' reports")
+    FuncQAQCHerbsMain()
+    Out_list$QAQCHerbs <- readRDS(here::here("Temp_out", "QAQCHerbsOut.RDS"))
+  }
+  
+    # Thresholds
+  if(as.character(Process_df$DataRequired[Process_df$Analysis == "Thresholds"]) %in% dat_temp) {
+    incProgress(1/10, detail = " for 'Thresholds' plots")
+    FuncThreshMain()
+    Out_list$ThreshList <- readRDS(here::here("Temp_out", "ThreshList.RDS"))
+    }
+
+  showModal(modalDialog(
+      title = "Done",
+      "You may now generate data reports, or navigate to the other tabs for summary graphs and tables"
+      ))
+  })
+})
+```
+
+```{r gen_reports}
+# Generate Reports
+observeEvent(eventExpr = input$button_rpts, {
+  withProgress(message = "Generating reports...", value = 0, {
+    
+    # Oak-Hickory Regeneration
+    if(any(c("OakHickOSI", "OakHickImport") %in%
+           input$sel_OakHickRpts)) {
+      shiny::validate(need("OakHickDat.RDS" %in% list.files(here::here("Temp_out")), "The 'Oak-Hickory (OSI or Importance)' report requires the cleaned data file 'OakHickDat.RDS' in 'Temp_out' folder"),
+               need("OakHickOut.RDS" %in% list.files(here::here("Temp_out")), "The 'Oak-Hickory (OSI or Importance)' report requires the summarized data file 'OakHickOut.RDS' in 'Temp_out' folder"))
+      if("OakHickOSI" %in% input$sel_OakHickRpts) {
+        incProgress(1/10, detail = "OakHickory - OSI")
+        rmarkdown::render(here::here("RMD_files", "OakHick_OSI_Import.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/OakHickOSI", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "PartialOSI"))}
+      if("OakHickImport" %in% input$sel_OakHickRpts) {
+        incProgress(1/10, detail = "OakHickory - Importance")
+        rmarkdown::render(here::here("RMD_files", "OakHick_OSI_Import.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/OakHickImport", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "log10ImpScore"))}
+    }
+
+    # OakHickory - Sander
+    if("OakHickSander" %in% input$sel_OakHickRpts) {
+      shiny::validate(need("OakHickOut.RDS" %in% list.files(here::here("Temp_out")), "The 'Oak-Hickory - Sander' report requires the summarized data file 'OakHickOut.RDS' in Dashboard working directory"))
+    incProgress(1/10, detail = "OakHickory - Sander")
+    rmarkdown::render(here::here("RMD_files", "OakHick_Sander.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/OakHickSander", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")))
+    }
+    
+    # QAQC - Sites
+    if("QAQCSites" %in% input$sel_QAQCRpts) {
+    shiny::validate(need("QAQCSitesOut.RDS" %in% list.files(here::here("Temp_out")), "The 'QAQC - Sites' report requires the summarized data file 'QAQCSitesOut.RDS' in 'Temp_out' folder"))
+      incProgress(1/10, detail = "QAQC - Sites")
+    rmarkdown::render(here::here("RMD_files", "QAQCSites.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/QAQCSites", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")))
+    }
+
+    # QAQC - Trees
+    if("QAQCTrees" %in% input$sel_QAQCRpts) {
+    shiny::validate(need("QAQCTreesOut.RDS" %in% list.files(here::here("Temp_out")), "The 'QAQC - Trees' report requires the summarized data file 'QAQCTreesOut.RDS' in 'Temp_out' folder"))
+    incProgress(1/10, detail = "QAQC - Trees")
+    rmarkdown::render(here::here("RMD_files", "QAQCTrees.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/QAQCTrees", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")))
+    }
+    
+    # QAQC - Herbs
+    if("QAQCHerbsMatch" %in% input$sel_QAQCRpts) {
+    shiny::validate(need("QAQCHerbsDat.RDS" %in% list.files(here::here("Temp_out")), "The 'QAQC - Herbs - Matchlist' report requires the cleaned data file 'QAQCHerbsDat.RDS' in 'Temp_out' folder"))
+    incProgress(1/10, detail = "QAQC - Herbs")
+    rmarkdown::render(here::here("RMD_files", "QAQCHerbsMatch.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/QAQCHerbsMatch", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")))
+    }
+    
+    if(any(c("QAQCHerbsBase", "QAQCHerbsHiCov", "QAQCHerbsRolled") %in% input$sel_QAQCRpts)) {
+    shiny::validate(need("QAQCHerbsDat.RDS" %in% list.files(here::here("Temp_out")), "The 'QAQC - Herbs' report requires the cleaned data file 'QAQCHerbsDat.RDS' in 'Temp_out' folder"),
+             need("QAQCHerbsOut.RDS" %in% list.files(here::here("Temp_out")), "The 'QAQC - Herbs' report requires the summarized data file 'QAQCHerbsOut.RDS' in 'Temp_out' folder"))
+      if("QAQCHerbsBase" %in% input$sel_QAQCRpts) {
+        incProgress(1/10, detail = "QAQC - Herbs (Base)")
+        rmarkdown::render(here::here("RMD_files", "QAQCHerbs.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/QAQCHerbsBase", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "HerbsBase"))}
+      if("QAQCHerbsHiCov" %in% input$sel_QAQCRpts) {
+        incProgress(1/10, detail = "QAQC - Herbs (HiCov)")
+        rmarkdown::render(here::here("RMD_files", "QAQCHerbs.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/QAQCHerbsHiCov", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "HerbsHiCov"))}
+      if("QAQCHerbsRolled" %in% input$sel_QAQCRpts) {
+        incProgress(1/10, detail = "QAQC - Herbs (Rolled)")
+        rmarkdown::render(here::here("RMD_files", "QAQCHerbs.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/QAQCHerbsRolled", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "HerbsRolled"))}
+      }
+  })
+  delfiles <- list.files(path = here::here("Reports_out"), pattern = '*.tex')
+  if(length(delfiles) > 0) {file.remove(file.path(here::here("Reports_out"), delfiles))} # remove all .tex files that were created during report generation
+  showModal(modalDialog(
+    title = "Done",
+    "Reports have been saved in the Dashboard working directory"
+    ))
+  })
+```
+
+Threshold Plots
+======================================  
+Inputs {.sidebar data-width=200}
+-------------------------------------
+```{r Thresh_Input}
+br()
+useShinyjs(rmd = TRUE)
+actionButton("button_Thresh_about", "  ABOUT THIS PAGE", icon = icon("question-sign", lib = "glyphicon"), style='padding:4px', width = "180px")
+
+selectInput("sel_ThreshDisplay",
+            label = "Display results for:",
+            choices = list("selected parameter, all parks" = "one_param", "selected park, all parameters" = "one_park", "selected parameter & park, by community group" = "by_cegl"),
+            selected = "one_param")
+
+renderUI({
+  if(!is.null(Out_list$ThreshList)) 
+    {
+    selectInput("sel_ThreshParam", 
+                label = "Parameter to Summarize:", 
+                choices = names(Out_list$ThreshList),
+                selected = names(Out_list$ThreshList)[1])
+  }
+})
+
+observe({
+  if (!is.null(input$sel_ThreshDisplay)) {
+    if(input$sel_ThreshDisplay == "one_park") {
+
+    shinyjs::disable("sel_ThreshParam")
+  } else {
+    shinyjs::enable("sel_ThreshParam")
+    updateSelectInput(session, "sel_ThreshParam", label = "Parameter to Summarize:", choices = names(Out_list$ThreshList), selected = names(Out_list$ThreshList)[1])
+  }
+  }
+})
+
+renderUI({
+  if(!is.null(Out_list$SelOptions$Park)) 
+    {
+    selectInput("sel_ThreshPark",
+                label = "Park to Summarize:", 
+                choices = Out_list$SelOptions$Park,
+                selected = Out_list$SelOptions$Park[1])
+    }
+  })
+
+observe({ # enable input conditionally
+        toggleState(id = "sel_ThreshPark", condition = input$sel_ThreshDisplay != "one_param")
+      })
+observe({
+  if (!is.null(input$sel_ThreshDisplay)) {
+    if(input$sel_ThreshDisplay == "one_param") {
+
+    shinyjs::disable("sel_ThreshPark")
+  } else {
+    shinyjs::enable("sel_ThreshPark")
+    updateSelectInput(session, "sel_ThreshPark", label = "Park to Summarize:", choices = Out_list$SelOptions$Park, selected = Out_list$SelOptions$Park[1])
+  }
+  }
+})
+
+radioButtons("sel_ThreshStat", 
+             label = "Statistic to Plot:", 
+             choiceNames = list("Median (68%CI)", "Mean (68%CI)"),
+             choiceValues = list("medn", "avg"),
+             selected = "avg")
+
+checkboxInput("sel_add95",
+              label = "Add 95% CI",
+              value = FALSE)
+
+br()
+```
+*\*To export a plot, right-click on the plot and select 'Save image as'*
+
+Column
+-------------------------------------
+### 
+```{r Thresh_Pointplots}
+renderPlot({
+  shiny::validate(need(!is.null(input$sel_ThreshDisplay), message = FALSE),
+           need(!is.null(input$sel_ThreshStat), message = FALSE),
+           need(!is.null(input$sel_add95), message = FALSE),
+           need(!is.null(Out_list$ThreshList), message = FALSE))
+  
+  # one metric, all parks
+  if(input$sel_ThreshDisplay %in% c("one_param", "by_cegl")) { 
+    shiny::validate(
+      need(!is.null(input$sel_ThreshParam), message = FALSE))
+    
+    if (input$sel_ThreshDisplay=="by_cegl") { # if summarize by community group for one park and one metric
+      shiny::validate(
+        need(!is.na(Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["cegl_summ_df"]]), message = "No community groups for this parameter"),
+        need(!is.null(input$sel_ThreshPark), message = FALSE))
+      dat_df <- Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["cegl_summ_df"]] %>% 
+        filter(UnitCode==input$sel_ThreshPark)
+    } else {
+      shiny::validate(
+        need(!is.na(Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["subunit_summ_df"]]), message = FALSE))
+      dat_df <- Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["subunit_summ_df"]]}
+    
+    combo <- Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["combo"]]
+    y_short_label <- Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["y_short_label"]]
+    
+    out_metric <- FuncPlotThreshMetric(dat_df = dat_df, by_cegl = input$sel_ThreshDisplay=="by_cegl", by_cegl_park = input$sel_ThreshPark, y_nam = input$sel_ThreshStat, plot_labs = list(x = ifelse(input$sel_ThreshDisplay=="by_cegl", "Community Group", "SubPark"), y = y_short_label, subtitle = ifelse(input$sel_ThreshStat=="avg", paste0("Mean ", toupper(input$sel_ThreshParam), " by SubPark and Survey Period Start Year (error bar is ", ifelse(input$sel_add95, "95% CI)", "68% CI)")), paste0("Median ", toupper(input$sel_ThreshParam), " by SubPark and Survey Period Start Year (error bar is ", ifelse(input$sel_add95, "95% CI)", "68% CI)")))), combo = combo, add95 = input$sel_add95)
+    Out_list$ThreshTable <- out_metric[["summary_df"]]
+    out_metric[["plot"]]
+  } else {    # one park, multiple metrics
+    if(input$sel_ThreshDisplay=="one_park") { 
+        shiny::validate(need(!is.null(input$sel_ThreshPark), message = FALSE))
+
+        ylab_df <- as.data.frame(do.call("rbind", lapply(Out_list$ThreshList,"[[", "y_short_label"))) %>% rownames_to_column(var = "param")
+        names(ylab_df) <- c("param", "y_short_label")
+        
+        park_df <- as.data.frame(do.call("rbind", lapply(Out_list$ThreshList,"[[", "subunit_summ_df"))) %>% rownames_to_column(var = "param")
+        park_df$param <- sub( "\\..*$", "", park_df$param)
+        park_df <- subset(park_df, UnitCode==input$sel_ThreshPark) %>%
+          left_join(ylab_df, by = "param")
+        
+        combo_df <- as.data.frame(do.call("rbind", lapply(Out_list$ThreshList,"[[", "combo"))) %>% rownames_to_column(var = "param")
+        combo_df <- separate(data = combo_df, col = param, c("param", "lim"), sep = "\\.")
+        out_park <- FuncPlotThreshPark(dat_df = park_df, y_nam = input$sel_ThreshStat, plot_title = ifelse(input$sel_ThreshStat=="avg", paste0("Mean value for each metric (error bar is ", ifelse(input$sel_add95, "95% CI)", "68% CI)")), paste0("Median value for each metric (error bar is ", ifelse(input$sel_add95, "95% CI)", "68% CI)"))), combo = combo_df, add95 = input$sel_add95)
+        Out_list$ThreshTable <- out_park[["summary_df"]]
+        out_park[["plot"]]
+    }
+  }
+})
+```
+
+###
+
+```{r Thresh_Table}
+renderTable({
+    shiny::validate(need(!is.null(Out_list$ThreshTable), message = FALSE),
+             need(!is.null(input$sel_ThreshDisplay), message = FALSE))
+    if(input$sel_ThreshDisplay %in% c("one_param", "by_cegl")) { 
+    shiny::validate(
+      need(!is.null(input$sel_ThreshParam), message = FALSE))
+    
+    if (input$sel_ThreshDisplay=="by_cegl") { # if summarize by community group for one park and one metric
+      shiny::validate(
+        need(!is.na(Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["cegl_summ_df"]]), message = "No community groups for this parameter"),
+        need(!is.null(input$sel_ThreshPark), message = FALSE))
+    } else {
+      shiny::validate(
+        need(!is.na(Out_list$ThreshList[input$sel_ThreshParam][[input$sel_ThreshParam]][["subunit_summ_df"]]), message = FALSE))
+    }} else {
+      if(input$sel_ThreshDisplay=="one_park") { 
+        shiny::validate(need(!is.null(input$sel_ThreshPark), message = FALSE))
+      }
+    }
+
+  Out_list$ThreshTable
+  }, align = "c"
+)
+```
+
+QAQC - Herbs {data-orientation=rows}
+======================================  
+Inputs {.sidebar data-width=200}
+-------------------------------------
+```{r RH_Input}
+br()
+
+actionButton("button_QAQCherbs_about", "  ABOUT THIS PAGE", icon = icon("question-sign", lib = "glyphicon"), style='padding:4px', width = "180px")
+observeEvent(eventExpr = input$button_QAQCherbs_about, {
+  browseURL(here::here("About_HTMLs", "About_QAQC_Herbs.html"))})
+
+radioButtons("sel_RHdat", 
+             label = "Parameter to summarize:", 
+             choiceNames = list("All species", "High cover species only", "All species, some rolled to genus"),
+             choiceValues = list("HerbsBase", "HerbsHiCov", "HerbsRolled"),
+             selected = "HerbsBase")
+
+radioButtons("sel_RHscale", 
+             label = "Sampling scale:", 
+             choiceNames = list("100SqM", "10SqM", "1SqM"),
+             choiceValues = list("100SqM", "10SqM", "1SqM"),
+             selected = "100SqM")
+
+HS_df <- reactive({
+  if(!is.null(Out_list$QAQCHerbs)) {
+    TempHS_df <- Out_list$QAQCHerbs[[paste0("HS", input$sel_RHscale, "_list")]][[input$sel_RHdat]]
+    TempHS_df
+    }
+  })
+
+HStab_df <- reactive({
+  if(!is.null(Out_list$QAQCHerbs)) {
+    TempHStab_df <- Out_list$QAQCHerbs[[paste0("HS", input$sel_RHscale, "Table_list")]][[input$sel_RHdat]]
+    TempHStab_df
+    }
+  })
+
+HM_df <- reactive({
+  if(!is.null(Out_list$QAQCHerbs)) {
+    TempHM_df <- Out_list$QAQCHerbs[[paste0("HM", input$sel_RHscale, "_list")]][[input$sel_RHdat]]
+    TempHM_df
+    }
+  })
+br()
+```
+*\*To export a plot, right-click on the plot and select 'Save image as'*
+
+Row
+-------------------------------------
+###
+
+```{r RH_PlotRichDiff_Hist}
+renderPlot({
+  shiny::validate(need(nrow(HS_df()) > 0, message = FALSE))
+  
+  FuncPlotHerbsRichDiff_Hist(HS_df = HS_df(), ScaleLab = input$sel_RHscale)
+})
+```
+
+###
+
+```{r RH_PlotRichDiff_Scatter}
+renderPlot({
+  shiny::validate(need(nrow(HS_df()) > 0, message = FALSE))
+  
+  FuncPlotHerbsRichDiff_Scatter(HS_df = HS_df(), ScaleLab = input$sel_RHscale)
+})
+```
+
+
+Row
+-------------------------------------
+
+###
+
+```{r RH_CDFtab}
+renderTable({
+  shiny::validate(need(nrow(HStab_df()) > 0, message = FALSE))
+  
+  HStab_df()}, align = "c"
+)
+```
+
+###
+
+```{r RH_PlotRichDiff_ECDF}
+renderPlot({
+  shiny::validate(need(nrow(HS_df()) > 0, message = FALSE))
+  
+  FuncPlotHerbsECDF(HS_df = HS_df(), ScaleLab = input$sel_RHscale)
+})
+```
+
+Row
+-------------------------------------
+### Unmatched Species Detections
+
+```{r RH_PlotRichUnmatched}
+renderPlot({
+  shiny::validate(need(nrow(HM_df()) > 0, message = FALSE))
+  MinDetect <- switch(input$sel_RHscale, # minimum number of species detections before showing in PointRichDiff plot
+                    `100SqM` = 5,
+                    `10SqM` = 30,
+                    `1SqM` = 30)
+  
+  FuncPlotHerbsRichUnmatched(HM_df = HM_df(), MinDetect, ScaleLab = input$sel_RHscale)
+  })
+```
+
+QAQC - Trees {data-orientation=rows}
+======================================  
+
+Inputs {.sidebar data-width=200}
+-------------------------------------
+```{r RT_Input}
+br()
+
+actionButton("button_QAQCtrees_about", "  ABOUT THIS PAGE", icon = icon("question-sign", lib = "glyphicon"), style='padding:4px', width = "180px")
+observeEvent(eventExpr = input$button_QAQCtrees_about, {
+  browseURL(here::here("About_HTMLs", "About_QAQC_Trees.html"))})
+
+radioButtons("sel_RTdat", 
+             label = "Parameter to summarize ('*' indicates categorical variable):", 
+             choiceNames = list("Status*", "Crown class*", "Dieback*", "Snag decay*", "Vigor*", "Tree DBH", "Seedlings 5-15 count", "Seedlings 15-30 count", "Seedlings 30-50 count", "Seedlings 50-137 count", "Saplings 0-1 count", "Saplings 1-2.5 count", "Saplings 2.5-5 count", "Saplings 5-10 count", "Trees count"),
+             choiceValues = list("Status", "Crown", "Dieback", "SnagDecay", "Vigor", "DBH", "Seed5_15", "Seed15_30", "Seed30_50", "Seed50_137", "Sap0_1", "Sap1_2.5", "Sap2.5_5", "Sap5_10", "TreeCounts"),
+             selected = "Status")
+
+RT_list <- reactive({
+  if(!is.null(Out_list$QAQCTrees)) {
+    TempRT_list <- Out_list$QAQCTrees[[input$sel_RTdat]]
+    TempRT_list
+    }
+  })
+
+br()
+```
+*\*To export a plot, right-click on the plot and select 'Save image as'*
+
+Row
+-------------------------------------
+### 
+
+```{r RT_Plot1}
+renderPlot({
+  if(input$sel_RTdat %in% c("Status", "Crown", "Dieback", "SnagDecay", "Vigor")) { # for categorical variables
+    shiny::validate(need(nrow(RT_list()[["PSA_df"]]) > 0, message = FALSE))
+    RTcateg_PlotPSA <- FuncPlotPSA(PSA_df = RT_list()[["PSA_df"]], xlabel = input$sel_RT)
+    RTcateg_PlotPSA 
+  } else { # for continuous variables
+    shiny::validate(need(nrow(RT_list()[["FinalDat_df"]]) > 0, message = FALSE))
+    DiffPlots_Hist <- FuncPlotTreesValDiff_Hist(RT_df = RT_list()[["FinalDat_df"]], metric_nam =  RT_list()[["plot_vals"]]$metric_nam)
+    DiffPlots_Hist
+  }
+})
+```
+
+### 
+
+```{r RT_Plot2}
+renderPlot({
+  shiny::validate(need(nrow(RT_list()[["FinalDat_df"]]) > 0, message = FALSE))
+  if(input$sel_RTdat %in% c("Status", "Crown", "Dieback", "SnagDecay", "Vigor")) { # for categorical variables
+    FuncColMat(QAQC_df = RT_list()[["FinalDat_df"]][, c("Value1", "Value2")], categ_vec = RT_list()[["categ_vec"]], plot_title = paste0("QAQC Evaluation - ", input$sel_RTdat))
+    } else { # for continuous variables
+    shiny::validate(need(nrow(RT_list()[["FinalDat_df"]]) > 0, message = FALSE))
+    DiffPlots_Scatter <- FuncPlotTreesValDiff_Scatter(RT_df = RT_list()[["FinalDat_df"]], metric_nam =  RT_list()[["plot_vals"]]$metric_nam)
+    DiffPlots_Scatter
+    }
+  })
+```
+
+Row
+-------------------------------------
+
+###
+
+```{r RT_Table3}
+renderTable({
+  shiny::validate(need(!input$sel_RTdat %in% c("Status", "Crown", "Dieback", "SnagDecay", "Vigor"), message = "No additional plots for categorical variables"),
+           need(nrow(RT_list()[["Diff_tab"]]) > 0, message = FALSE))
+  RT_list()[["Diff_tab"]]}, align = "c"
+)
+```
+
+###
+
+```{r RT_Plot4}
+renderPlot({
+  shiny::validate(need(!input$sel_RTdat %in% c("Status", "Crown", "Dieback", "SnagDecay", "Vigor"), message = "No additional plots for categorical variables"),
+           need(nrow(RT_list()[["FinalDat_df"]]) > 0, message = FALSE))
+  RT_list()[["ECDF_plot"]]
+})
+```
+
+Oak-Hickory
+======================================  
+Inputs {.sidebar data-width=200}
+-------------------------------------
+```{r OH_Input}
+br()
+
+actionButton("button_OH_about", "  ABOUT THIS PAGE", icon = icon("question-sign", lib = "glyphicon"), style='padding:4px', width = "180px")
+
+renderUI({
+  if(!is.null(Out_list$OakHick)) {
+    selectInput("sel_OHSubPark", 
+                label = "Choose a SubPark:", 
+                choices = sort(unique(Out_list$OakHick$OHfinal_df$SubPark)),
+                selected = sort(unique(Out_list$OakHick$OHfinal_df$SubPark))[1])
+    }
+  })
+```
+*\*To export a plot, right-click on the plot and select 'Save image as'*
+
+Column {.tabset .tabset-fade}
+-------------------------------------
+### Oak Sustainability Index
+
+```{r OH_Plot1}
+renderPlot({
+  if(!is.null(Out_list$OakHick) & !is.null(input$sel_OHSubPark)) {
+    cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")# color-blind friendly palette
+    Dat_df <- subset(Out_list$OakHick[["OHfinal_df"]], SubPark==input$sel_OHSubPark, select = c(Plot, MeanOSI, Low95OSI, High95OSI, PriorBurnCycle, CycLabels))
+    Dat_df <- Dat_df[complete.cases(Dat_df),]
+    ggplot(Dat_df, aes(x=Plot, y=MeanOSI, group=CycLabels, color=CycLabels)) + 
+    geom_point(position = position_dodge(width = .5)) +
+    geom_errorbar(aes(ymin=Low95OSI, ymax=High95OSI, linetype=PriorBurnCycle), width = 0, position = position_dodge(width=.5)) +
+    ylim(0, 2) +
+    geom_hline(yintercept = .5, color = "red", linetype = "dashed") +
+    geom_hline(yintercept = 1, color = "red") + 
+    scale_colour_manual(values=cbbPalette, name = "Survey cycle") +
+    labs(x = "Plot", y = "OSI", title = paste0("Mean (95% CI) Oak Sustainability Index for ", input$sel_OHSubPark), subtitle = "Dashed error bars indicate plots burned within past 5 years; Excludes QAQC data", linetype = "Recent burn?") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+          axis.title.x = element_text(margin = margin(t = 15, r = 0, b = 0, l = 0)))
+    }
+  })
+```
+
+### log(Importance)
+
+```{r OH_Plot2}
+renderPlot({
+  if(!is.null(Out_list$OakHick) & !is.null(input$sel_OHSubPark)) {
+    cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7") # color-blind friendly palette
+    ymax_val <- ceiling(max(Out_list$OakHick$OHfinal_df$High95Import, na.rm = TRUE) + 1)
+    Dat_df <- subset(Out_list$OakHick[["OHfinal_df"]], SubPark==input$sel_OHSubPark, select = c(Plot, MeanImport, Low95Import, High95Import, PriorBurnCycle, CycLabels))
+    Dat_df <- Dat_df[complete.cases(Dat_df),]
+    ggplot(Dat_df, aes(x=Plot, y=MeanImport, group=CycLabels, color=CycLabels)) + 
+    geom_point(position = position_dodge(width = .5)) +
+    geom_errorbar(aes(ymin=Low95Import, ymax=High95Import, linetype=PriorBurnCycle), width = 0, position = position_dodge(width=.5)) +
+    geom_hline(yintercept = 5, color = "red", linetype = "dashed") +
+    geom_hline(yintercept = 10, color = "red") + 
+    ylim(0, ymax_val) +
+    scale_colour_manual(values=cbbPalette, name = "Survey cycle") +
+    labs(x = "Plot", y = "log(Importance)", title = paste0("Mean (95% CI) log(Importance) for ", input$sel_OHSubPark), subtitle = "Dashed error bars indicate plots burned within past 5 years; Excludes QAQC data", linetype = "Recent burn?") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+          axis.title.x = element_text(margin = margin(t = 15, r = 0, b = 0, l = 0)))
+    }
+  })
+```
+
+### Relationship between OSI & log(Importance)
+
+```{r OH_Plot3}
+renderPlot({
+  if(!is.null(Out_list$OakHick) & !is.null(input$sel_OHSubPark)) {
+    ymax_val <- ceiling(max(Out_list$OakHick$OHfinal_df$High95Import, na.rm = TRUE) + 1)
+    Dat_df <- subset(Out_list$OakHick[["OHfinal_df"]], SubPark==input$sel_OHSubPark, select = c(MeanOSI, MeanImport))
+    Dat_df <- Dat_df[complete.cases(Dat_df),]
+    ggplot(Dat_df, aes(x=MeanOSI, y=MeanImport)) +
+      geom_point() +
+      xlim(0, 2) +
+      ylim(0, ymax_val) +
+      labs(x="OSI", y="log(Importance)", title = paste0("OSI vs. log(Importance) estimates for ", input$sel_OHSubPark), subtitle = "Excludes QAQC data") +
+      theme_bw(base_size=10)
+    }
+  })
+```
+
+Maps
+====================================== 
+Inputs {.sidebar data-width=250}
+-------------------------------------
+```{r Maps_Input}
+br()
+
+actionButton("button_Maps_about", "  ABOUT THIS PAGE", icon = icon("question-sign", lib = "glyphicon"), style='padding:4px', width = "230px")
+
+renderUI({
+  if(!is.null(Out_list$SelOptions)) {
+    selectInput("sel_MapPark", 
+                label = "Choose a SubPark:", 
+                choices = Out_list$SelOptions$SubPark,
+                selected = Out_list$SelOptions$SubPark[1])
+    }
+  })
+    
+renderUI({
+  if(!is.null(Out_list$SelOptions)) {
+    sliderTextInput("sel_MapCycle", force_edges = TRUE, label = "Choose a survey cycle:", choices = Out_list$SelOptions$Cycle, selected = Out_list$SelOptions$Cycle[1], dragRange = FALSE, width = "85%")
+    }
+})
+
+radioButtons("sel_MapMetric", 
+             label = "Parameter to map:", 
+             choiceNames = list("Oak-Hickory OSI", "Native herb richness", "Exotic herb richness", "Exotic herb cover", "High priority exotic cover (select species below)"),
+             choiceValues = list("OakHick", "NativeRich", "ExoticRich", "ExoticCov", "HPExoticCov"),
+             selected = "ExoticCov")
+
+renderUI({
+  if(!is.null(Out_list$MapDat)) {
+    selectInput("sel_HPExotic",
+            label = NULL,
+            choices = sort(unique(Out_list$MapDat$HPExoticCov$PlantName)),
+            selected = sort(unique(Out_list$MapDat$HPExoticCov$PlantName))[1],
+            multiple = FALSE)
+  }
+})
+
+br()
+
+radioButtons("sel_ColorScheme", 
+             label = "Choose a color scheme:", 
+             choiceNames = list("white-blue-orange", "white-orange-red"),
+             choiceValues = list("WBO", "WOR"),
+             selected = "WOR",
+             inline = FALSE)
+
+radioButtons("sel_ColorType", 
+             label = "Show map colors as:", 
+             choiceNames = list("continuous", "scorecard cut-offs"),
+             choiceValues = list("cont", "score"),
+             selected = "score",
+             inline = FALSE)
+
+renderUI({
+  if(!is.null(input$sel_MapMetric) & !is.null(Out_list$MapDat)) {
+    
+    defaultvals <- switch(input$sel_MapMetric,
+        OakHick = c(xmin = 0, xmax = 2, xcut1 = 0.5, xcut2 = 1, xstep = 0.1),
+        NativeRich = c(xmin = 0, xmax = 10*ceiling(max(Out_list$MapDat$NativeRich$Metric)/10), xcut1 = 40, xcut2 = 60, xstep = 2), # round up to nearest multiple of 10
+        ExoticRich = c(xmin = 0, xmax = 2*ceiling(max(Out_list$MapDat$ExoticRich$Metric)/2), xcut1 = 4, xcut2 = 8, xstep = 2),
+        ExoticCov = c(xmin = 0, xmax = 100, xcut1 = 5, xcut2 = 10, xstep = 5),
+        HPExoticCov = c(xmin = 0, xmax = 100, xcut1 = 2, xcut2 = 4, xstep = 2))
+    
+    sliderInput("sel_MapScore", label = "Change scorecard cut-offs:", min = defaultvals["xmin"], max = defaultvals["xmax"], value = c(defaultvals["xcut1"], defaultvals["xcut2"]), step = defaultvals["xstep"], ticks = TRUE, dragRange = TRUE, width = "85%")
+  }
+})
+```
+
+Column
+-------------------------------------
+```{r setzoom}
+renderUI({
+  if(!is.null(input$sel_MapPark) & !is.null(Out_list$CUPNbounds)) {
+    CUPNmapbounds_SP <- subset(Out_list$CUPNbounds, SubUnitLab==input$sel_MapPark)
+map_zoom <- min(MaxZoom(lonrange = range(CUPNmapbounds_SP$long), latrange = range(CUPNmapbounds_SP$lat)))
+
+  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = 18, value = map_zoom - 0.25, step = 0.25, ticks = FALSE, dragRange = FALSE, width = "85%")
+    }
+  })
+```
+*\*Open circles indicate a value of zero (0)*
+
+```{r maps}
+renderLeaflet({
+  shiny::validate(need(!is.null(Out_list$CUPNbounds) & !is.null(Out_list$MapDat), message = FALSE))
+  Dat_df = Out_list$MapDat[[input$sel_MapMetric]]
+  if(input$sel_MapMetric == "OakHick") {
+    Dat_df = Out_list$OakHick[["OHfinal_df"]] %>%
+      dplyr::rename(Metric = MeanOSI) %>%
+      dplyr::mutate(Poptext = paste0(Plot, " (", Year, "):", "<br/>", Metric, " (95% CI ", Low95OSI, ", ", High95OSI, ")"))
+  }
+  if(input$sel_MapMetric == "HPExoticCov") {
+    Dat_df = subset(Dat_df, PlantName == input$sel_HPExotic)
+  }
+  
+  if(!is.null(input$sel_MapPark) & !is.null(input$sel_MapCycle) & !is.null(input$sel_MapMetric) & !is.null(input$sel_MapZoom)) {
+  
+  MapDat_df <- subset(Dat_df, SubPark==input$sel_MapPark & Cycle==input$sel_MapCycle)
+  
+  CUPNmapbounds_SP <- subset(Out_list$CUPNbounds, SubUnitLab==input$sel_MapPark)
+  map_center <- c(mean(c(min(CUPNmapbounds_SP$long), max(CUPNmapbounds_SP$long))), mean(c(min(CUPNmapbounds_SP$lat), max(CUPNmapbounds_SP$lat))))
+
+  if(!is.null(MapDat_df)) {
+    basemap <- leaflet(data = MapDat_df, options = leafletOptions(zoomControl = FALSE, zoomSnap = 0.25)) %>%
+      addProviderTiles("Esri.WorldImagery") %>%
+      setView(lng = map_center[1], lat = map_center[2], zoom = input$sel_MapZoom)
+    
+    pieces <- unique(unlist(subset(Out_list$CUPNbounds, SubUnitLab==input$sel_MapPark, select = "piece")))
+    for (p in pieces) {
+      d <- subset(Out_list$CUPNbounds, SubUnitLab==input$sel_MapPark & piece==p)
+      basemap %<>%
+        addPolylines(lat = d$lat, lng = d$long, weight = 2, color = "yellow", opacity = 1)
+    }
+
+    binvals <- switch(input$sel_MapMetric,
+        OakHick = c(xmin = 0, xmax = 2, xcut1 = 0.5, xcut2 = 1, xstep = 0.1, title = "Oak-Hickory OSI", rev = TRUE),
+        NativeRich = c(xmin = 0, xmax = 10*ceiling(max(Out_list$MapDat$NativeRich$Metric)/10), xcut1 = 40, xcut2 = 60, xstep = 2, title = "# native species", rev = TRUE),
+        ExoticRich = c(xmin = 0, xmax = 2*ceiling(max(Out_list$MapDat$ExoticRich$Metric)/2), xcut1 = 4, xcut2 = 8, xstep = 2, title = "# exotic species", rev = FALSE),
+        ExoticCov = c(xmin = 0, xmax = 100, xcut1 = 5, xcut2 = 15, xstep = 5, title = "% exotic cover", rev = FALSE),
+        HPExoticCov = c(xmin = 0, xmax = 100, xcut1 = 2, xcut2 = 4, xstep = 2, title = "% species cover", rev = FALSE))
+    
+    ColorScheme <- switch(input$sel_ColorScheme, WBO = c("#FFFFFF", "#9ad0f3", "#e79f00"), WOR = c("#FFFFFF", "#e79f00", "#D55E00"))
+    
+    pal_bins <- colorBin(ColorScheme, bins = c(as.numeric(binvals["xmin"]), input$sel_MapScore[1], input$sel_MapScore[2], as.numeric(binvals["xmax"])), reverse = as.logical(binvals["rev"]))
+    
+    # continuous color ramp
+    shiny::validate(
+      need(input$sel_MapScore[1] - as.numeric(binvals["xmin"]) > 0, message = FALSE),
+      need(as.numeric(binvals["xmax"]) - input$sel_MapScore[2] > 0, message = FALSE))
+    rc1 <- colorRampPalette(colors = ColorScheme[1:2], bias = 5)((input$sel_MapScore[1] - as.numeric(binvals["xmin"]))/as.numeric(binvals["xstep"])) # vector of color for values smaller than first cut
+    rc2 <- colorRampPalette(colors = ColorScheme[2:3], bias = 5)((as.numeric(binvals["xmax"]) - input$sel_MapScore[2])/as.numeric(binvals["xstep"]))
+    pal_cont <- colorNumeric(c(rc1, rc2), domain = c(as.numeric(binvals["xmin"]), as.numeric(binvals["xmax"])), reverse = as.logical(binvals["rev"]))
+    
+    if(input$sel_ColorType=="score") {
+      basemap %>%
+        addCircleMarkers(lng = ~Longitude, lat = ~Latitude, opacity = 1, color = ~pal_bins(Metric), radius = 6, fillOpacity = ~ifelse(Metric==0, 0.2, 1), fill = TRUE, popup = ~Poptext) %>%
+        addLegend(position = "bottomright", pal = pal_bins, values = c(as.numeric(binvals["xmin"]), as.numeric(binvals["xmax"])), title = as.character(binvals["title"]), opacity = 1)
+    } else {
+      if(input$sel_ColorType=="cont") {
+      basemap %>%
+        addCircleMarkers(lng = ~Longitude, lat = ~Latitude, opacity = 1, color = ~pal_cont(Metric), radius = 6, fillOpacity = ~ifelse(Metric==0, 0.2, 1), fill = TRUE, popup = ~Poptext) %>%
+        addLegend(position = "bottomright", pal = pal_cont, values = c(as.numeric(binvals["xmin"]), as.numeric(binvals["xmax"])), title = as.character(binvals["title"]), opacity = 1)
+      }
+    }
+  }
+  }
+})
+```

@@ -1,0 +1,54 @@
+---
+output: pdf_document
+geometry: margin=1in
+classoption: landscape
+mainfont: Cambria
+fontsize: 12pt
+---
+
+```{r include=FALSE}
+library(knitr)
+```
+
+### Oak-Hickory regeneration, Importance scores
+
+***Table 1. Wilcox rank statistics by SubPark***
+*Only showing data for non-QAQC. Resurveys is the number of plots with Importance scores for two survey cycles. 'N.unburned' is the number of resurveyed plots that were NEVER prescribe burned. 'N.burned' is the number of resurveyed plots that were prescribe burned at some time prior to the Cycle 2 survey [2016, 2020]. Wilcox rank sum test p-values and 90% confidence intervals are provided for sample sizes of 6 or more plots.*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+options(knitr.kable.NA = '')
+Import.regen.burned.summary <- readRDS("~/Google Drive/NPS Monitoring/PROJECT TASKS/CUPN Vegetation/CUPNveg/CUPN_ParkOak_Outputs/OH.Import.regen.burned.summary.RDS")
+
+kable(Import.regen.burned.summary, row.names = FALSE, align='c') 
+```
+
+\newpage
+
+***Figure 1. Importance boxplots by SubPark and prescribed burn history.***
+*Only showing data for non-QAQC. For each SubPark, red boxplots represent log10(Importance+1) scores for plot-surveys that had been burned any time prior to that survey. For each SubPark, different plots are often represented in the unburned (gray) versus burned (red) boxplots, and a single boxplot may represent multiple OSI values (from different surveys) for a single plot. Therefore, any interpretation of this figure should refer to the underlying data table for potential biases.*
+```{r fig.width=9.5, fig.height=4.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+(Import.box.burn <- readRDS("~/Google Drive/NPS Monitoring/PROJECT TASKS/CUPN Vegetation/CUPNveg/CUPN_ParkOak_Outputs/OH.Import.box.burn.RDS"))
+```
+
+\newpage
+
+***Figure 2. Line plots of Importance scores.***
+*Only showing data for non-QAQC. Left-side plot shows survey plots that have never been prescribe burned. On right-side plot, dashed lines between cycles [2011, 2015] and [2016, 2020] indicate a prescribed burn occurred between these two survey cycles. If a prescribed burn occurred ANY (KNOWN) TIME prior to Cycle 1, it is shown as a horizontal line to the left of [2011, 2015]. We do not have an Importance estimate prior to Cycle 1.*
+```{r fig.width=9, fig.height=6.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+(Import.lines <- readRDS("~/Google Drive/NPS Monitoring/PROJECT TASKS/CUPN Vegetation/CUPNveg/CUPN_ParkOak_Outputs/OH.Import.lines.RDS"))
+```
+
+\newpage
+
+***Figure 3. Scatterplots of Importance scores vs. most recent burn.***
+*Only showing data for non-QAQC. Facet cells are Community Groups. In each facet cell, a plot may be represented more than once (multiple survey cycles).*
+```{r fig.width=8, fig.height=5.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+(Import.burn.points <- readRDS("~/Google Drive/NPS Monitoring/PROJECT TASKS/CUPN Vegetation/CUPNveg/CUPN_ParkOak_Outputs/OH.Import.burn.points.RDS"))
+```
+
+\newpage 
+
+***Figure 4. Scatterplot of Importance score vs. partial OSI.***
+*Only showing data for non-QAQC.*
+```{r fig.width=8, fig.height=5.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+(Imp.OSI.points <- readRDS("~/Google Drive/NPS Monitoring/PROJECT TASKS/CUPN Vegetation/CUPNveg/CUPN_ParkOak_Outputs/Imp.OSI.points.RDS"))
+```

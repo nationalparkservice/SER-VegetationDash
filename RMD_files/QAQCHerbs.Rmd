@@ -1,0 +1,300 @@
+---
+title: "QAQC - HERBS - COVER CLASS & SPECIES RICHNESS (`r params$type`)"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+fontsize: 12pt
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+mainfont: Cambria
+geometry: margin=.5in
+params:
+  type: HerbsBase
+classoption: landscape
+---
+```{r include=FALSE}
+library(knitr)
+library(ggplot2)
+library(cowplot)
+
+QAQCHerbsOut <- readRDS("../Temp_out/QAQCHerbsOut.RDS")
+QAQCHerbsDat <- readRDS("../Temp_out/QAQCHerbsDat.RDS")
+
+FuncHerbsCover <- function (Dat_df) {
+  # Function to summarize herb match types. Use only for 100sqm-level analysis, and all species or hicov (not rolled to genus) 
+  # 
+  # Args:
+  #   Dat_df:  A data frame of the cleaned herb data
+  # Returns:
+  #   A list object that can be printed via an .RMD file
+  HerbsCC_df <- Dat_df
+  HerbsCC_df$CC[is.na(HerbsCC_df$CC)] <- 0 # Zero for now
+  HerbsCC_df <- HerbsCC_df %>%
+    select(PlotID, QAQC, PlantName, CC) %>%
+    spread(key=QAQC, value=CC)
+  HerbsCC_df <- HerbsCC_df[complete.cases(HerbsCC_df),]
+  colnames(HerbsCC_df)[3:4] <- c("Nsurv", "Qsurv")
+  HerbsCC_df$Nsurv[HerbsCC_df$Nsurv==0] <- NA # convert back to NA
+  HerbsCC_df$Qsurv[HerbsCC_df$Qsurv==0] <- NA
+  HerbsCC_df$AbsDiff <- abs(HerbsCC_df$Qsurv - HerbsCC_df$Nsurv)
+  HerbsCC_df <- as.data.frame(HerbsCC_df)
+  return(HerbsCC_df)
+}
+
+FuncPlotHerbsRichUnmatched <- function (HM_df, MinDetect, ScaleLab) {
+  # Function to generate a bar plot of proportion of species detections missed in QAQC surveys.
+  # 
+  # Args:
+  #   HM_df:  Herb match data frame.
+  #   MinDetect:  Minimum number of detections for a species to be included
+  #   ScaleLab:  Character string indicating the scale of evaluation (options are "Plot", "Module", "Eighth")
+  # Returns:
+  #   Bar plot
+  #
+  HFspecies <- which(table(HM_df$PlantName) >= MinDetect) # species detected on at least X plot/mod/eighth-surveys
+  HFmissed <- HM_df %>%
+    filter(PlantName %in% names(HFspecies)) %>%
+    group_by(PlantName) %>%
+    dplyr::summarize(Count = n(),
+              AbsMissed = Count - sum(MatchTT),
+              PropMissed = as.integer(round((sum(!MatchTT)/Count) * 100))) %>%
+    mutate(PlantName = paste0(PlantName, " (", Count, ")"))
+  
+  BarMissed_plot <- ggplot() +
+    geom_bar(data = subset(HFmissed, PropMissed > 50), aes(x=reorder(PlantName, -PropMissed), y = PropMissed), width=.5, stat="identity") +
+    theme_bw(base_size=10) +
+    ylim(0, 100) +
+    geom_hline(yintercept=50, color="red") +
+    labs(y="Proportion of Detections Unmatched (%)", x="Species", title= paste0("Proportion of ", ScaleLab, "Survey Detections Unmatched"), subtitle=paste0("(Species with at least ", MinDetect, " detections and >50% unmatched)")) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5)) +
+    theme(plot.title = element_text(size=10), legend.title = element_blank())
+  
+  return(BarMissed_plot)
+}
+
+FuncPlotHerbsRichDiff <- function (HS_df, ScaleLab) {
+  # Function to generate a bar plot of proportion of species detections missed in QAQC surveys.
+  # 
+  # Args:
+  #   HM_df:  Herb match data frame.
+  #   MinDetect:  Minimum number of detections for a species to be included
+  #   ScaleLab:  Character string indicating the scale of evaluation (options are "Plot", "Module", "Eighth")
+  # Returns:
+  #   Histogram and scatterplot
+  #
+  HistRichDiff_plot <- 
+    ggplot(HS_df, aes(x=RichDiff)) +
+    geom_bar() +
+    geom_vline(xintercept=0, col="red") +
+    labs(subtitle="(Positive difference means QAQC higher)", x=paste0("Difference in Herb ", ScaleLab, " Richness"),  y=paste0("Number of ", ScaleLab, "-Surveys")) +
+    theme_bw(base_size = 12)
+  
+  PointsRichDiff_plot <-
+    ggplot(HS_df, aes(x=NsurvSpp, y=QsurvSpp)) +
+    geom_point() +
+    geom_abline(slope=1, col="red") +
+    labs(x=paste0("Herb ", ScaleLab, " Richness in Normal Survey"), y=paste0("Herb ", ScaleLab, " Richness in QAQC Survey")) +
+    theme_bw(base_size = 12)
+  
+  return_list <- list(HistRichDiff_plot, PointsRichDiff_plot)
+  return(return_list)
+}
+```
+
+\newpage
+
+### HERB COVER CLASS
+
+Data Notes:
+
+* Herb cover class is evaluated only at the 100sq.m. level.
+
+* Only use species-100sq.m.-surveys with detection in both the QAQC and non-QAQC survey.
+
+* 9 cover classes of different spans.
+
+&nbsp;
+
+**Herbs Cover Class Empirical Cumulative Distribution Function**
+
+&nbsp;
+
+```{r echo=FALSE, results='as is'}
+if(params$type == "HerbsRolled") {
+  cat("Cover class summaries not applicable for data with some species rolled to genus level")
+}
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+if(params$type %in% c("HerbsBase", "HerbsHiCov")) {
+  HerbsDat <- QAQCHerbsDat[[params$type]]
+  HerbsCC_df <- FuncHerbsCover(HerbsDat)
+  
+  HS_tab <- data.frame(table(factor(HerbsCC_df$AbsDiff, levels = min(HerbsCC_df$AbsDiff, na.rm = TRUE):max(HerbsCC_df$AbsDiff, na.rm = TRUE))))
+  HS_tab$CDF <- round(cumsum(HS_tab$Freq)/sum(HS_tab$Freq)*100, 1)
+  names(HS_tab) <- c("Difference in Counts", "Frequency", "CDF (%)")
+  kable(HS_tab)
+}
+```
+
+\newpage
+
+```{r fig.width=7, fig.height=7, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+if(params$type %in% c("HerbsBase", "HerbsHiCov")) {
+  QAQC_df <- HerbsCC_df[, c("Nsurv", "Qsurv")]
+  QAQC_df[is.na(QAQC_df)] <- "XXX"
+  
+  categ_vec <- c(1:9, "XXX")
+  QAQC_df[, 1] <- as.integer(factor(QAQC_df[, 1], levels=categ_vec)) # convert categories to numbers
+  QAQC_df[, 2] <- 
+    as.numeric(factor(QAQC_df[, 2], levels=categ_vec))
+  
+  QAQC_mat <- as.matrix(QAQC_df)
+  QAQC_mat <- t(apply(QAQC_mat,1,sort)) # For upper triangular, within each row, the smaller number is first
+  QAQC_squaremat <- 
+    table(factor(QAQC_mat[,1], levels=1:length(categ_vec)),
+          factor(QAQC_mat[,2], levels=1:length(categ_vec)))
+  
+  oldpar <- par(no.readonly = TRUE)
+  par(oma=c(0, 0, 0, 0))
+  par(cex=.8)
+  par(mar=c(3.1, 4.1, 7.1, 3.1))
+  
+  cellcol <-
+    color.scale(cbind(QAQC_squaremat, seq(min(QAQC_squaremat, na.rm=TRUE), max(QAQC_squaremat, na.rm=TRUE), length.out=nrow(QAQC_squaremat))), c(1,0,0), c(1,1,0), c(0,1,1))[, 1:dim(QAQC_squaremat)[2]]
+cellcol[QAQC_squaremat==0] <- "white"
+cellcol[lower.tri(cellcol)] <- "black"
+QAQC_squaremat[lower.tri(QAQC_squaremat)] <- NA
+(color2D.matplot(QAQC_squaremat, cellcolors=cellcol, show.legend=FALSE, show.values=TRUE, axes=FALSE, xlab="", ylab=""))
+(axis(3, at=0.75:dim(QAQC_squaremat)[2]-.25, tick=FALSE, labels=categ_vec, las=2))
+(axis(2, at=.75:dim(QAQC_squaremat)[1]-.25, tick=FALSE, las=2, labels=rev(categ_vec)))
+title(main=paste0("QAQC Evaluation - Herbs CC (N = ", sum(QAQC_squaremat, na.rm=TRUE), ")"), line=4.4)
+par(oldpar)  # set margins back to default
+}
+```
+
+\newpage
+
+### HERB RICHNESS & SPECIES - 100SQ.M. LEVEL
+
+**Herbs 100sq.m. richness summary**
+
+&nbsp;
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsPlotSummary <- QAQCHerbsOut$HS100SqM_list[[params$type]]
+kable(summary(HerbsPlotSummary[c("NsurvSpp", "QsurvSpp", "PSturn", "PercRichDiff", "UniqueSpp", "MatchTrue", "MatchByMean", "MatchByUnique")]))
+```
+
+\newpage
+
+**Differences in herb richness at 100sq.m. level**
+
+&nbsp;
+
+```{r fig.width=9, fig.height=5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsDiffPlots_list <- FuncPlotHerbsRichDiff(HS_df = HerbsPlotSummary, ScaleLab = "Plot")
+plot_grid(HerbsDiffPlots_list[[1]], HerbsDiffPlots_list[[2]], ncol=2)
+```
+
+\newpage
+
+**Herb Richness Empirical Cumulative Distribution Function (100sq.m.)**
+
+&nbsp;
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCHerbsOut$HS100SqMTable_list[[params$type]], align = "c")
+```
+
+\newpage
+
+**Herb species most missed at 100sq.m. level**
+```{r fig.width=9, fig.height=6, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+(FuncPlotHerbsRichUnmatched(HM_df = QAQCHerbsOut$HM100SqM_list[[params$type]], MinDetect = 5, ScaleLab = "Plot"))
+```  
+
+\newpage
+
+### HERB RICHNESS & SPECIES - 10SQ.M. LEVEL
+
+**Herbs 10sq.m. richness summary**
+
+&nbsp;
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsModSummary <- QAQCHerbsOut$HS10SqM_list[[params$type]]
+kable(summary(HerbsModSummary[c("NsurvSpp", "QsurvSpp", "PSturn", "PercRichDiff", "UniqueSpp", "MatchTrue", "MatchByMean", "MatchByUnique")]))
+```
+
+\newpage
+
+**Differences in herb richness at 10sq.m. level**
+
+&nbsp;
+
+```{r fig.width=9, fig.height=5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsDiffMod_list <- FuncPlotHerbsRichDiff(HS_df = HerbsModSummary, ScaleLab = "Mod")
+plot_grid(HerbsDiffMod_list[[1]], HerbsDiffMod_list[[2]], ncol=2)
+```
+
+\newpage
+
+**Herb Richness Empirical Cumulative Distribution Function (10sq.m.)**
+
+&nbsp;
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCHerbsOut$HS10SqMTable_list[[params$type]], align = "c")
+```
+
+\newpage
+
+**Herb species most missed at 10sq.m. level**
+```{r fig.width=9, fig.height=6, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+(FuncPlotHerbsRichUnmatched(HM_df = QAQCHerbsOut$HM10SqM_list[[params$type]], MinDetect = 30, ScaleLab = "Mod"))
+```  
+
+\newpage
+
+### HERB RICHNESS & SPECIES - 1SQ.M. LEVEL
+
+**Herbs 1sq.m. richness summary**
+
+&nbsp;
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsEighthSummary <- QAQCHerbsOut$HS1SqM_list[[params$type]]
+kable(summary(HerbsEighthSummary[c("NsurvSpp", "QsurvSpp", "PSturn", "PercRichDiff", "UniqueSpp", "MatchTrue", "MatchByMean", "MatchByUnique")]))
+```
+
+\newpage
+
+**Differences in herb richness at 1sq.m. level**
+
+&nbsp;
+
+```{r fig.width=9, fig.height=5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HerbsDiffEighth_list <- FuncPlotHerbsRichDiff(HS_df = HerbsEighthSummary, ScaleLab = "Eighth")
+plot_grid(HerbsDiffEighth_list[[1]], HerbsDiffEighth_list[[2]], ncol=2)
+```
+
+\newpage
+
+**Herb Richness Empirical Cumulative Distribution Function (1sq.m.)**
+
+&nbsp;
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+kable(QAQCHerbsOut$HS1SqMTable_list[[params$type]], align = "c")
+```
+
+\newpage
+
+**Herb species most missed at 1sq.m. level**
+```{r fig.width=9, fig.height=6, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+(FuncPlotHerbsRichUnmatched(HM_df = QAQCHerbsOut$HM1SqM_list[[params$type]], MinDetect = 60, ScaleLab = "Eighth"))
+```  
