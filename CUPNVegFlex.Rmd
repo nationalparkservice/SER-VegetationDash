@@ -1,5 +1,5 @@
 ---
-title: "CUPN VEGETATION"
+title: "SER VEGETATION"
 output:
   flexdashboard::flex_dashboard:
     vertical_layout: scroll
@@ -53,8 +53,10 @@ Column {data-width=250}
 ```{r genrpts_QAQC}
 checkboxGroupInput("sel_OakHickRpts", 
                    label = "OAK-HICKORY REGENERATION REPORTS", 
-                   choiceNames = list("Sustainability index", "Importance values", "Sander threshold"), 
-                   choiceValues = list("OakHickOSI", "OakHickImport", "OakHickSander"),
+                   choiceNames = list("Sander threshold"),
+                   choiceValues = list("OakHickSander"),
+                   # choiceNames = list("Sustainability index", "Importance values", "Sander threshold"), 
+                   # choiceValues = list("OakHickOSI", "OakHickImport", "OakHickSander"),
                    selected = NULL)
 bsPopover(id = "sel_OakHickRpts", title = "Oak-Hickory Regeneration Reports", content = "These reports summarize oak-hickory regeneration potential in plots that are currently classified as oak-hickory plots. A separate report is created for each of three regeneration metrics. With all three metrics, higher values mean the plot is more likely to maintain a dominant canopy of oak and hickory species into the near future, based on the current density of oak and hickory seedlings and saplings.", placement = "left", options = list(container = "body"))
 
@@ -66,12 +68,12 @@ checkboxGroupInput("sel_QAQCRpts",
 bsPopover(id = "sel_QAQCRpts", title = "QAQC Reports", content = "These reports summarize repeatability in estimates of vegetation field metrics. In each survey year at each park, a subset of plots are re-surveyed within one week of the original plot survey. QAQC reports summarize measurement variability for each metric, e.g., differences in classification of herb cover class between two survey teams.", placement = "left", options = list(container = "body"))
 
 # STILL NEED TO DO THIS ONE BELOW
-checkboxGroupInput("sel_Maps", 
-                   label = "MAPS",
-                   choiceNames = list("Native herb richness", "Exotic herb richness"),
-                   choiceValues = list("NativeRichMap", "ExoticRichMap"),
-                   selected = NULL)
-bsPopover(id = "sel_Maps", title = "MAPS", content = "These reports show the distribution of the selected metric (e.g., native herb richness) across a park, with each survey site colored according to its scorecard category for that metric.", placement = "left", options = list(container = "body"))
+# checkboxGroupInput("sel_Maps", 
+#                    label = "MAPS",
+#                    choiceNames = list("Native herb richness", "Exotic herb richness"),
+#                    choiceValues = list("NativeRichMap", "ExoticRichMap"),
+#                    selected = NULL)
+# bsPopover(id = "sel_Maps", title = "MAPS", content = "These reports show the distribution of the selected metric (e.g., native herb richness) across a park, with each survey site colored according to its scorecard category for that metric.", placement = "left", options = list(container = "body"))
 ```
 
 Column {data-width=190}
@@ -130,6 +132,7 @@ observeEvent(eventExpr = input$button_load, {
   
   Out_list$ThreshList <- if(file.exists(here::here("Temp_out", "ThreshList.RDS"))) readRDS(here::here("Temp_out", "ThreshList.RDS"))
   
+  saveRDS(isolate(reactiveValuesToList(Out_list)), "Temp.RDS")
   Sys.sleep(0.25)
   
   showModal(modalDialog(
@@ -241,18 +244,18 @@ observeEvent(eventExpr = input$button_import, {
 observeEvent(eventExpr = input$button_rpts, {
   withProgress(message = "Generating reports...", value = 0, {
     
-    # Oak-Hickory Regeneration
-    if(any(c("OakHickOSI", "OakHickImport") %in%
-           input$sel_OakHickRpts)) {
-      shiny::validate(need("OakHickDat.RDS" %in% list.files(here::here("Temp_out")), "The 'Oak-Hickory (OSI or Importance)' report requires the cleaned data file 'OakHickDat.RDS' in 'Temp_out' folder"),
-               need("OakHickOut.RDS" %in% list.files(here::here("Temp_out")), "The 'Oak-Hickory (OSI or Importance)' report requires the summarized data file 'OakHickOut.RDS' in 'Temp_out' folder"))
-      if("OakHickOSI" %in% input$sel_OakHickRpts) {
-        incProgress(1/10, detail = "OakHickory - OSI")
-        rmarkdown::render(here::here("RMD_files", "OakHick_OSI_Import.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/OakHickOSI", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "PartialOSI"))}
-      if("OakHickImport" %in% input$sel_OakHickRpts) {
-        incProgress(1/10, detail = "OakHickory - Importance")
-        rmarkdown::render(here::here("RMD_files", "OakHick_OSI_Import.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/OakHickImport", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "log10ImpScore"))}
-    }
+    # # Oak-Hickory Regeneration
+    # if(any(c("OakHickOSI", "OakHickImport") %in%
+    #        input$sel_OakHickRpts)) {
+    #   shiny::validate(need("OakHickDat.RDS" %in% list.files(here::here("Temp_out")), "The 'Oak-Hickory (OSI or Importance)' report requires the cleaned data file 'OakHickDat.RDS' in 'Temp_out' folder"),
+    #            need("OakHickOut.RDS" %in% list.files(here::here("Temp_out")), "The 'Oak-Hickory (OSI or Importance)' report requires the summarized data file 'OakHickOut.RDS' in 'Temp_out' folder"))
+    #   if("OakHickOSI" %in% input$sel_OakHickRpts) {
+    #     incProgress(1/10, detail = "OakHickory - OSI")
+    #     rmarkdown::render(here::here("RMD_files", "OakHick_OSI_Import.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/OakHickOSI", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "MeanOSI"))}
+    #   if("OakHickImport" %in% input$sel_OakHickRpts) {
+    #     incProgress(1/10, detail = "OakHickory - Importance")
+    #     rmarkdown::render(here::here("RMD_files", "OakHick_OSI_Import.Rmd"), output_format = input$sel_rptformat, output_file = paste0(here::here("Reports_out"), "/OakHickImport", switch(input$sel_rptformat, word_document = ".doc", pdf_document = ".pdf")), params = list(type = "log10ImpScore"))}
+    # }
 
     # OakHickory - Sander
     if("OakHickSander" %in% input$sel_OakHickRpts) {
