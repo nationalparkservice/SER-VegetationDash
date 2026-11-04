@@ -14,11 +14,13 @@ package.check <- lapply(packages, FUN = function(x) {
 })
 
 nboot = 50 # Number of bootstraps. For testing, use small number; for production, 1000
+options(dplyr.summarise.inform = FALSE) # silence the "summarise() has regrouped" console messages
 
 # Plot threshold colors
 color_poor <- "#D98B72"
 color_moderate <- "#F0DC8C"
 color_good <- "#7FB2D6"
+thresh_alpha <- 0.4 # transparency of threshold background bands (each band is drawn once)
 
 ### FUNCTIONS -----
 FuncReadCSV <- function(path, ...) {
@@ -801,31 +803,18 @@ FuncPlotThreshMetric <- function(dat_df, by_cegl, by_cegl_park = NULL, y_nam, pl
       facet_grid(.~SubunitCode)
     }}
   
-  # Add colored background
+  # Add colored background (one rectangle per band; own 1-row data so alpha does not stack)
   n_x <- length(unique(dat_df$x))
-  
-  if ("good_lims" %in% rownames(combo)) { 
-    p <- p +
-      geom_rect(aes(xmin = 0.5,
-                    xmax = n_x + 0.5,
-                    ymin = combo["good_lims", "min"], 
-                    ymax = combo["good_lims", "max"]),
-                fill=color_good, alpha=.1)}
-  
-  if ("caution_lims" %in% rownames(combo)) { 
-    p <- p +
-      geom_rect(aes(xmin = 0.5,
-                    xmax = n_x + 0.5,
-                    ymin = combo["caution_lims", "min"], 
-                    ymax = combo["caution_lims", "max"]),
-                fill=color_moderate, alpha=.1)}
-  if ("sigconcern_lims" %in% rownames(combo)) { 
-    p <- p +
-      geom_rect(aes(xmin = 0.5,
-                    xmax = n_x + 0.5,
-                    ymin = combo["sigconcern_lims", "min"], 
-                    ymax = combo["sigconcern_lims", "max"]),
-                fill=color_poor, alpha=.1)}
+  band_cols <- c(good_lims = color_good, caution_lims = color_moderate, sigconcern_lims = color_poor)
+  for (lim_nm in names(band_cols)) {
+    if (lim_nm %in% rownames(combo)) {
+      p <- p +
+        geom_rect(data = data.frame(xmin = 0.5, xmax = n_x + 0.5,
+                                    ymin = combo[lim_nm, "min"], ymax = combo[lim_nm, "max"]),
+                  aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+                  inherit.aes = FALSE, fill = band_cols[[lim_nm]], alpha = thresh_alpha)
+    }
+  }
   
   p <- p + 
   {if(add95)
@@ -842,7 +831,7 @@ FuncPlotThreshMetric <- function(dat_df, by_cegl, by_cegl_park = NULL, y_nam, pl
   return(return_list)
 }
 
-FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
+FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95, free_y = FALSE) {
   # Plots of data with threshold-colored background. One park, many metrics.
   #
   # Args:
@@ -851,6 +840,8 @@ FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
   #   plot_title: title for plot
   #   combo: dataframe with limits information for that subpark, all metrics
   #   add95: add 95% CI
+  #   free_y: if TRUE, each subpark panel sets its own y-axis range from its data (threshold bands are clipped to that range);
+  #           if FALSE, the y-axis range is the same for every subpark (set by the threshold bands)
   #   
   # Returns:
   #   List of point plots, one for each subpark in the park.
@@ -893,44 +884,40 @@ FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
       geom_errorbar(aes(ymin = low68, ymax = high68), width = 0, linewidth = 0) + # just to set the stage
       facet_wrap(.~ y_short_label, scales = "free_y", nrow = 1, , labeller = labeller(y_short_label = label_wrap_gen(17)))
     
-    # Add colored background
-    if ("good_lims" %in% unique(combo$lim)) {
-      temp_dat <- dat_df %>%
-        left_join(subset(combo, lim=="good_lims", select = c(param, min, max)), by = "param") %>%
-        select(y, y_short_label, x, min, max) %>%
-        group_by(y_short_label, x, min, max) %>%
-        dplyr::summarize(y = max(y)) %>%
-        distinct()
-      temp_dat <- temp_dat[complete.cases(temp_dat),]
-      xmax_len <- length(unique(temp_dat$x))+0.5
-      p <- p +
-        geom_rect(
-          data = temp_dat,
-          aes(xmin = 0.5, xmax = xmax_len, ymin = min, ymax = max), fill=color_good, alpha = 0.1)}
-    
-    if ("caution_lims" %in% combo$lim) {
-      temp_dat <- dat_df %>%
-        left_join(subset(combo, lim=="caution_lims", select = c(param, min, max)), by = "param") %>%
-        group_by(y_short_label, x, min, max) %>%
-        dplyr::summarize(y = max(y)) %>%
-        distinct()
-      temp_dat <- temp_dat[complete.cases(temp_dat),]
-      p <- p +
-        geom_rect(
-          data = temp_dat,
-          aes(xmin = 0.5, xmax = length(unique(temp_dat$x))+0.5, ymin = min, ymax = max), fill=color_moderate, alpha = 0.1)}
-    
-    if ("sigconcern_lims" %in% combo$lim) {
-      temp_dat <- dat_df %>%
-        left_join(subset(combo, lim=="sigconcern_lims", select = c(param, min, max)), by = "param") %>%
-        group_by(y_short_label, x, min, max) %>%
-        dplyr::summarize(y = max(y)) %>%
-        distinct()
-      temp_dat <- temp_dat[complete.cases(temp_dat),]
-      p <- p +
-        geom_rect(
-          data = temp_dat,
-          aes(xmin = 0.5, xmax = length(unique(temp_dat$x))+0.5, ymin = min, ymax = max), fill=color_poor, alpha=0.1)}
+    # data range per metric for this subpark (used only when y-axes are scaled separately)
+    if (free_y) {
+      rng_df <- subset(dat_df, x == i) %>%
+        group_by(y_short_label) %>%
+        dplyr::summarize(lo = min(y, low68, if (add95) low95 else NA, na.rm = TRUE),
+                         hi = max(y, high68, if (add95) high95 else NA, na.rm = TRUE)) %>%
+        mutate(pad = pmax(0.08 * (hi - lo), 1e-6), lo = lo - pad, hi = hi + pad)
+    }
+
+    # Add colored background (one rectangle per facet and band so alpha does not stack)
+    n_x <- length(unique(dat_df$x))
+    band_cols <- c(good_lims = color_good, caution_lims = color_moderate, sigconcern_lims = color_poor)
+    for (lim_nm in names(band_cols)) {
+      if (lim_nm %in% combo$lim) {
+        temp_dat <- dat_df %>%
+          left_join(subset(combo, lim == lim_nm, select = c(param, min, max)), by = "param") %>%
+          select(y_short_label, min, max) %>%
+          distinct()
+        temp_dat <- temp_dat[complete.cases(temp_dat), ]
+        if (free_y && nrow(temp_dat) > 0) { # clip bands to this subpark's data range
+          temp_dat <- temp_dat %>% left_join(rng_df, by = "y_short_label") %>%
+            mutate(min = pmax(min, lo), max = pmin(max, hi)) %>%
+            filter(min < max) %>% select(y_short_label, min, max)
+        }
+        if (nrow(temp_dat) > 0) { # skip bands with no limits for the parameters being plotted
+          temp_dat$xmin <- 0.5
+          temp_dat$xmax <- n_x + 0.5
+          p <- p +
+            geom_rect(data = temp_dat,
+                      aes(xmin = xmin, xmax = xmax, ymin = min, ymax = max),
+                      inherit.aes = FALSE, fill = band_cols[[lim_nm]], alpha = thresh_alpha)
+        }
+      }
+    }
     p <- p +
     {if(add95)
     {geom_errorbar(aes(ymin = low95, ymax = high95), width = 0, linewidth = 0.25, linetype = "dashed", position = position_dodge(width = 0.5))}} +
@@ -958,7 +945,7 @@ FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
     p <- plot_grid(title, x, ncol = 1, rel_heights = c(0.1, 1))
   } else {
     x <- plot_grid(title, plots_list[[1]], ncol = 1, rel_heights = c(0.1, 1))
-    p <- plot_grid(x, NULL, nrow = 1)
+    p <- plot_grid(NULL, x, NULL, nrow = 1, rel_widths = c(1, 2, 1)) # single SubPark: keep half width, centered
   }
   return_list <- list(summary_df = summary_df, plot = p)
   return(return_list)
@@ -968,14 +955,12 @@ FuncThreshSub <- function (cegl_bin, rawdata, y_label, y_short_label, field_name
   
   BootFunc <- function(dat, N) {
     if (N > 1) {
-      boot_median <- boot_mean <- list()
-      for (r in 1:nboot) {
-        boot_median[[r]] <- median(sample(x=dat, size=length(dat), replace=TRUE))
-        boot_mean[[r]] <- mean(sample(x=dat, size=length(dat), replace=TRUE)) # mean for one bootstrapped sample
-      } # end of bootstrap replicates
-      b_medianCI <- quantile(unlist(boot_median), probs=c(0.025, 0.16, 0.84, 0.975))
+      # each column of the matrix is one bootstrapped sample (faster than looping over replicates)
+      boot_med_mat <- matrix(sample(x=dat, size=N*nboot, replace=TRUE), nrow=N, ncol=nboot)
+      boot_avg_mat <- matrix(sample(x=dat, size=N*nboot, replace=TRUE), nrow=N, ncol=nboot)
+      b_medianCI <- quantile(apply(boot_med_mat, 2, median), probs=c(0.025, 0.16, 0.84, 0.975))
       names(b_medianCI) <- c("medn_q5", "medn_q16", "medn_q84", "medn_q95")
-      b_meanCI <- quantile(unlist(boot_mean), probs=c(0.025, 0.16, 0.84, 0.975)) # <<<<<<<< CHECK ON THIS--EQUIVALENT TO 68% AND 95% AROUND THE MEAN <<<<<<<<<
+      b_meanCI <- quantile(colMeans(boot_avg_mat), probs=c(0.025, 0.16, 0.84, 0.975)) # <<<<<<<< CHECK ON THIS--EQUIVALENT TO 68% AND 95% AROUND THE MEAN <<<<<<<<<
       names(b_meanCI) <- c("avg_q5", "avg_q16", "avg_q84", "avg_q95")
       boot <- c(b_medianCI, b_meanCI)
     } else {
@@ -2172,19 +2157,20 @@ FuncOakHickMain <- function () {
   Sander_Nplots <- as.data.frame(Sander_Nplots)
   
   BootFunc <- function(dat, reps=2000) {
-    dat <- droplevels(dat)
-    boot_mean <- list()
-    for (r in 1:reps) {
-      boot_counts <- list()
-      boot_plots <- sample(x=unique(dat$Plot), size=length(unique(dat$Plot)), replace=TRUE) # bootstrapped plots from that SubPark
-      for (i in 1:length(boot_plots)) {
-        boot_counts[[i]] <- sample(x=dat$SapCount[dat$Plot==boot_plots[i]], size=8, replace=TRUE) # the bootstrapped counts--8 per bootstrapped plot
-      }
-      boot_mean[[r]] <- mean(unlist(boot_counts)) # mean box count of saplings for one bootstrapped sample of the SubPark
-    } # end of bootstrap replicates
+    # Hierarchical bootstrap: resample plots, then resample the 8 counts within each resampled plot.
+    # Vectorized across replicates (each column of the matrices is one replicate).
+    vals <- split(dat$SapCount, droplevels(as.factor(dat$Plot))) # counts for each plot
+    n <- length(vals)
+    m <- lengths(vals)
+    off <- c(0, cumsum(m))[seq_len(n)]
+    flat <- unlist(vals, use.names = FALSE)
+    P <- matrix(sample.int(n, n*reps, replace=TRUE), nrow=n, ncol=reps) # bootstrapped plots
+    Pexp <- P[rep(seq_len(n), each=8), , drop=FALSE] # 8 counts drawn for every bootstrapped plot
+    pos <- floor(runif(length(Pexp)) * m[Pexp]) + 1 # random count within the chosen plot
+    boot_mean <- colMeans(matrix(flat[off[Pexp] + pos], nrow=8*n, ncol=reps)) # mean count of saplings for each bootstrapped sample of the SubPark
     return_list <- list(
-      unlist(boot_mean),
-      quantile(unlist(boot_mean), probs=c(0.05, 0.5, 0.95))
+      boot_mean,
+      quantile(boot_mean, probs=c(0.05, 0.5, 0.95))
     )
     return(return_list) # returns the vector of bootstrapped means and also a vector of the median and 90% confidence interval limits
   }
