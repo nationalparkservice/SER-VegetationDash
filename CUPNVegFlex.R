@@ -5,7 +5,7 @@
 # Error: NULL value passed as symbol address
 
 ### Load libraries -----
-packages <- c("plyr", "magrittr", "reshape2", "plotrix", "cowplot", "lubridate", "tidyverse", "scales", "stringr", "rgdal", "here")
+packages <- c("plyr", "magrittr", "reshape2", "plotrix", "cowplot", "lubridate", "tidyverse", "scales", "stringr", "here")
 package.check <- lapply(packages, FUN = function(x) {
   if (!require(x, character.only = TRUE)) {
     install.packages(x, dependencies = TRUE, repos = "http://cran.us.r-project.org")
@@ -13,7 +13,25 @@ package.check <- lapply(packages, FUN = function(x) {
   }
 })
 
-### CALLED FUNCTIONS -----
+nboot = 50 # Number of bootstraps. For testing, use small number; for production, 1000
+
+# Plot threshold colors
+color_poor <- "#D98B72"
+color_moderate <- "#F0DC8C"
+color_good <- "#7FB2D6"
+
+### FUNCTIONS -----
+FuncReadCSV <- function(path, ...) {
+  raw <- readr::read_file_raw(path)
+  cr <- raw == as.raw(13)
+  crlf <- cr & c(raw[-1] == as.raw(10), FALSE)
+  raw[cr & !crlf] <- as.raw(10)   # bare CR -> LF
+  raw <- raw[!crlf]               # drop the CR in CRLF
+  enc <- if (validUTF8(rawToChar(raw))) "UTF-8" else "latin1"
+  readr::read_csv(raw, show_col_types = FALSE,
+                  locale = readr::locale(encoding = enc), ...)
+}
+
 FuncReformatMC <- function (Dat_df) {
   # Function to fill in missing MC data
   #
@@ -38,20 +56,20 @@ FuncFormatVeg <- function () {
   #
   # Returns:
   #   A formatted data frame of the vegetation data
-  VegTemp_df <- read_csv(here::here("Data_in", "VegDat.csv"))
-  TempCG_df <- read_csv(here::here("Data_in", "FinalCG.csv"))
+  VegTemp_df <- FuncReadCSV(here::here("Data_in", "VegDat.csv"))
+  TempCG_df <- FuncReadCSV(here::here("Data_in", "FinalCG.csv"))
   
-  VegTemp_df$CoverPercent <- sapply(as.character(VegTemp_df$CoverClass), switch,
-           `1` = sqrt(0.01*0.1),
-           `2` = sqrt(0.1*1),
-           `3` = sqrt(1*2),
-           `4` = sqrt(2*5),
-           `5` = sqrt(5*10),
-           `6` = sqrt(10*25),
-           `7` = sqrt(25*50),
-           `8` = sqrt(50*75),
-           `9` = sqrt(75*95),
-           `10` = sqrt(95*100)) # calculate geometric mean for each cover class interval (replaces the arithmetic mean that is exported from Access)
+  # VegTemp_df$CoverPercent <- sapply(as.character(VegTemp_df$CoverClass), switch,
+  #          `1` = sqrt(0.01*0.1),
+  #          `2` = sqrt(0.1*1),
+  #          `3` = sqrt(1*2),
+  #          `4` = sqrt(2*5),
+  #          `5` = sqrt(5*10),
+  #          `6` = sqrt(10*25),
+  #          `7` = sqrt(25*50),
+  #          `8` = sqrt(50*75),
+  #          `9` = sqrt(75*95),
+  #          `10` = sqrt(95*100)) # calculate geometric mean for each cover class interval (replaces the arithmetic mean that is exported from Access)
   
   PlotCG_df <- TempCG_df %>% # for each plot, gives the short CG
     dplyr::select(EventID=event_name_date_calc, CGShort=lastCommGroup) %>%
@@ -101,13 +119,33 @@ FuncFormatVeg <- function () {
 }
 
 FuncMapBounds <- function () {
-  CUPNmap <- readOGR(here::here("Map_files", "CUPN_shapefiles", "CUPN.shp"))
-  CUPNmap <- spTransform(CUPNmap, CRS("+init=epsg:4326")) # make sure shapefiles are in same projection as google maps
-  CUPNmap@data$id <- rownames(CUPNmap@data)
-  CUPNmapbounds_df <- CUPNmap %>% broom::tidy() %>%  # convert to data frame with boundary information
-    left_join(CUPNmap@data[,c("SubUnitLab", "id")], by = "id")
+  CUPNmap <- sf::st_read(here::here("Map_files", "CUPN_shapefiles", "CUPN.shp"), quiet = TRUE) %>%
+    sf::st_transform(4326) # match leaflet/google projection
+  
+  # Convert polygon boundaries to a data frame of vertices (replaces broom::tidy on an sp object)
+  CUPNmapbounds_df <- CUPNmap %>%
+    sf::st_cast("MULTIPOLYGON") %>%
+    sf::st_cast("POLYGON", warn = FALSE) %>%      # one row per polygon piece
+    dplyr::mutate(piece = dplyr::row_number()) %>%
+    dplyr::select(SubUnitLab, piece) %>%
+    dplyr::group_by(SubUnitLab, piece) %>%
+    dplyr::group_modify(~ {
+      xy <- sf::st_coordinates(.x)                # X, Y, L1 (ring), L2
+      data.frame(long = xy[, "X"], lat = xy[, "Y"])
+    }) %>%
+    dplyr::ungroup() %>%
+    as.data.frame()
+  
   saveRDS(CUPNmapbounds_df, "Map_files/CUPNmapbounds.RDS")
 }
+# FuncMapBounds <- function () {
+#   CUPNmap <- readOGR(here::here("Map_files", "CUPN_shapefiles", "CUPN.shp"))
+#   CUPNmap <- spTransform(CUPNmap, CRS("+init=epsg:4326")) # make sure shapefiles are in same projection as google maps
+#   CUPNmap@data$id <- rownames(CUPNmap@data)
+#   CUPNmapbounds_df <- CUPNmap %>% broom::tidy() %>%  # convert to data frame with boundary information
+#     left_join(CUPNmap@data[,c("SubUnitLab", "id")], by = "id")
+#   saveRDS(CUPNmapbounds_df, "Map_files/CUPNmapbounds.RDS")
+# }
  
 FuncMapRpt <- function(Dat_df, CUPNmapbounds, cyc, metric) {
   SPExoticsMap_list <- list()
@@ -336,7 +374,7 @@ FuncHerbsMC <- function (Dat_df) {
            M2=sum(M2C2, M2C3) > 0,
            M3=sum(M3C2, M3C4) > 0,
            M4=sum(M4C2, M4C3) > 0) %>%
-    dplyr::mutate_at(vars(names(Dat_df[,grep("M.C.", colnames(Dat_df))])),funs(.>1)) %>% # converts to presence-absence at the 10m2 plot level
+    dplyr::mutate(dplyr::across(dplyr::all_of(grep("M.C.", names(Dat_df), value = TRUE)), ~ .x > 1)) %>% # converts to presence-absence at the 10m2 plot level
     ungroup() %>%
     dplyr::mutate(PlotID=as.factor(PlotID)) %>%
     dplyr::select(PlotID, QAQC, PlantName, InPlot, everything())
@@ -358,7 +396,7 @@ FuncHerbsMatch <- function (Dat_df, group_vec) {
   HM_df$MatchType <- paste(HM_df$Nsurv, HM_df$Qsurv, sep="-")
   
   HS_df <- HM_df %>%
-    group_by(.dots = group_vec) %>%
+    group_by(dplyr::across(dplyr::all_of(group_vec))) %>%
     dplyr::summarize(
       Nonly = sum(MatchType=="TRUE-FALSE"),
       Qonly = sum(MatchType=="FALSE-TRUE"),
@@ -670,8 +708,8 @@ FuncPSA <- function(categ_vec, DatWide_df, c1, c2, missing_val=TRUE) {
   Prop_tab <- prop.table(table(DatWide_df[, c1], DatWide_df[, c2])) # This is the matrix of proportions
   PropMelt_tab <- setNames(melt(Prop_tab), c("Grp1", "Grp2", "Prob"))
   PropMelt_tab <- PropMelt_tab[PropMelt_tab$Prob>0,]
-  Boot_list <- vector("list", length = 1000)
-  for(b in 1:1000) {
+  Boot_list <- vector("list", length = nboot)
+  for(b in 1:nboot) {
     PropSample_tab <- PropMelt_tab[sample(1:nrow(PropMelt_tab), size=nrow(DatWide_df), replace=TRUE, prob=PropMelt_tab$Prob), c("Grp1", "Grp2")] # A bootstrapped sample
     BootTemp_df <- FuncPSA_df(categ_vec, PropSample_tab, "Grp1", "Grp2")
     BootTemp_df$PSA[is.na(BootTemp_df$PSA)] <- 0
@@ -758,39 +796,41 @@ FuncPlotThreshMetric <- function(dat_df, by_cegl, by_cegl_park = NULL, y_nam, pl
   combo$max[combo$max==99999] <- max(axes_max, 1.2*max(combo$max[combo$max!=99999]), na.rm = TRUE)
 
   p <- ggplot(data = dat_df, aes(x=x, y=y, fill = panel_init_year)) + 
-    geom_errorbar(aes_string(ymin = "low68", ymax = "high68"), width = 0, size = 0) + # just to set the stage
+    geom_errorbar(aes(ymin = low68, ymax = high68), width = 0, linewidth = 0) + # just to set the stage
     {if(by_cegl & num_subparks>1) {
       facet_grid(.~SubunitCode)
     }}
   
   # Add colored background
+  n_x <- length(unique(dat_df$x))
+  
   if ("good_lims" %in% rownames(combo)) { 
     p <- p +
       geom_rect(aes(xmin = 0.5,
-                    xmax = length(unique(dat_df$x))+0.5,
+                    xmax = n_x + 0.5,
                     ymin = combo["good_lims", "min"], 
                     ymax = combo["good_lims", "max"]),
-                fill="#33FF33", alpha=.3)}
+                fill=color_good, alpha=.1)}
   
   if ("caution_lims" %in% rownames(combo)) { 
     p <- p +
       geom_rect(aes(xmin = 0.5,
-                    xmax = length(unique(dat_df$x))+0.5,
+                    xmax = n_x + 0.5,
                     ymin = combo["caution_lims", "min"], 
                     ymax = combo["caution_lims", "max"]),
-                fill="#FFFF00", alpha=.3)}
+                fill=color_moderate, alpha=.1)}
   if ("sigconcern_lims" %in% rownames(combo)) { 
     p <- p +
       geom_rect(aes(xmin = 0.5,
-                    xmax = length(unique(dat_df$x))+0.5,
+                    xmax = n_x + 0.5,
                     ymin = combo["sigconcern_lims", "min"], 
                     ymax = combo["sigconcern_lims", "max"]),
-                fill="#FF3333", alpha=.3)}
+                fill=color_poor, alpha=.1)}
   
   p <- p + 
   {if(add95)
-  {geom_errorbar(aes_string(ymin = "low95", ymax = "high95"), width = 0, size = 0.25, linetype = "dashed", position = position_dodge(width = 0.5))}} +
-    geom_errorbar(aes_string(ymin = "low68", ymax = "high68"), width = 0, size = 0.5, position = position_dodge(width = 0.5)) +
+  {geom_errorbar(aes(ymin = low95, ymax = high95), width = 0, linewidth = 0.25, linetype = "dashed", position = position_dodge(width = 0.5))}} +
+    geom_errorbar(aes(ymin = low68, ymax = high68), width = 0, linewidth = 0.5, position = position_dodge(width = 0.5)) +
     geom_point(size = 4, shape = 21, position = position_dodge(width = 0.5)) +
     labs(x = plot_labs$x, y = plot_labs$y, subtitle = plot_labs$subtitle) +
     scale_fill_grey() +
@@ -850,7 +890,7 @@ FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
   plots_list <- list()
   for(i in unique(dat_df$x)) { # separate plot per subpark
     p <- ggplot(data = subset(dat_df, x==i), aes(x=x, y=y, fill = panel_init_year)) +
-      geom_errorbar(aes_string(ymin = "low68", ymax = "high68"), width = 0, size = 0) + # just to set the stage
+      geom_errorbar(aes(ymin = low68, ymax = high68), width = 0, linewidth = 0) + # just to set the stage
       facet_wrap(.~ y_short_label, scales = "free_y", nrow = 1, , labeller = labeller(y_short_label = label_wrap_gen(17)))
     
     # Add colored background
@@ -866,7 +906,7 @@ FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
       p <- p +
         geom_rect(
           data = temp_dat,
-          aes(xmin = 0.5, xmax = xmax_len, ymin = min, ymax = max), fill="#33FF33", alpha = 0.9)}
+          aes(xmin = 0.5, xmax = xmax_len, ymin = min, ymax = max), fill=color_good, alpha = 0.1)}
     
     if ("caution_lims" %in% combo$lim) {
       temp_dat <- dat_df %>%
@@ -878,7 +918,7 @@ FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
       p <- p +
         geom_rect(
           data = temp_dat,
-          aes(xmin = 0.5, xmax = length(unique(temp_dat$x))+0.5, ymin = min, ymax = max), fill="#FFFF00", alpha = 0.9)}
+          aes(xmin = 0.5, xmax = length(unique(temp_dat$x))+0.5, ymin = min, ymax = max), fill=color_moderate, alpha = 0.1)}
     
     if ("sigconcern_lims" %in% combo$lim) {
       temp_dat <- dat_df %>%
@@ -890,11 +930,11 @@ FuncPlotThreshPark <- function(dat_df, y_nam, plot_title, combo, add95) {
       p <- p +
         geom_rect(
           data = temp_dat,
-          aes(xmin = 0.5, xmax = length(unique(temp_dat$x))+0.5, ymin = min, ymax = max), fill="#FF3333", alpha=0.9)}
+          aes(xmin = 0.5, xmax = length(unique(temp_dat$x))+0.5, ymin = min, ymax = max), fill=color_poor, alpha=0.1)}
     p <- p +
     {if(add95)
-    {geom_errorbar(aes_string(ymin = "low95", ymax = "high95"), width = 0, size = 0.25, linetype = "dashed", position = position_dodge(width = 0.5))}} +
-      geom_errorbar(aes_string(ymin = "low68", ymax = "high68"), width = 0, size = 0.5, position = position_dodge(width = 0.5)) +
+    {geom_errorbar(aes(ymin = low95, ymax = high95), width = 0, linewidth = 0.25, linetype = "dashed", position = position_dodge(width = 0.5))}} +
+      geom_errorbar(aes(ymin = low68, ymax = high68), width = 0, linewidth = 0.5, position = position_dodge(width = 0.5)) +
       geom_point(size = 4, shape = 21, position = position_dodge(width = 0.5)) +
       labs(subtitle = i) +
       scale_fill_grey() +
@@ -929,7 +969,7 @@ FuncThreshSub <- function (cegl_bin, rawdata, y_label, y_short_label, field_name
   BootFunc <- function(dat, N) {
     if (N > 1) {
       boot_median <- boot_mean <- list()
-      for (r in 1:1000) {
+      for (r in 1:nboot) {
         boot_median[[r]] <- median(sample(x=dat, size=length(dat), replace=TRUE))
         boot_mean[[r]] <- mean(sample(x=dat, size=length(dat), replace=TRUE)) # mean for one bootstrapped sample
       } # end of bootstrap replicates
@@ -1061,19 +1101,19 @@ FuncThreshSub <- function (cegl_bin, rawdata, y_label, y_short_label, field_name
   combo_text <-NULL
   if (length(good_lims)!=0) { 
     combo <- rbind(combo,good_lims)
-    combo_colors <- c("#33FF33")
+    combo_colors <- c(color_good)
     combo_text <-c("Good")
     
   }
   if (length(caution_lims)!=0) {
     combo <- rbind(combo,caution_lims)
-    combo_colors <- c(combo_colors,c("#FFFF00"))
+    combo_colors <- c(combo_colors,c(color_moderate))
     combo_text <- c(combo_text ,c("Caution"))
     
   }
   if (length(sigconcern_lims)!=0) {
     combo <- rbind(combo,sigconcern_lims)
-    combo_colors <- c(combo_colors,c("#FF3333"))
+    combo_colors <- c(combo_colors,c(color_poor))
     combo_text <- c(combo_text ,c("Significant\nConcern"))
     
   }
@@ -1099,24 +1139,24 @@ FuncThreshSub <- function (cegl_bin, rawdata, y_label, y_short_label, field_name
 ### MAIN FUNCTIONS -----
 FuncThreshMain <- function() {
   thresh_list <- list()
-  cegl_bin <- read_csv(here::here("Data_in", "cegl_x_bin.csv")) %>%
+  cegl_bin <- FuncReadCSV(here::here("Data_in", "cegl_x_bin.csv")) %>%
     select(CEGL, bin = gp1)
   
   # One chart per park-metric, x-axis is year ----
   #cwd (coarse woody debris)
-  cwd<-read_csv(here::here("Data_in", "qry_stat_cwd_byPanelYear.csv"))
+  cwd<-FuncReadCSV(here::here("Data_in", "qry_stat_cwd_byPanelYear.csv"))
   thresh_list$cwd <- FuncThreshSub(cegl_bin, cwd,"cwdPercentOfLiveVol","Coarse Woody Debris","cwdPercentOfLiveVol", c(15,5), cutoffs_one_is_sigconcern=NULL, cutoffs_high_is_good=NULL)
   
   #snag LARGE DENSITY
-  snag<-read_csv(here::here("Data_in", "qry_snagDensity_event_panel.csv"))
+  snag<-FuncReadCSV(here::here("Data_in", "qry_snagDensity_event_panel.csv"))
   thresh_list$snag <- FuncThreshSub(cegl_bin, snag,"plot_large_Snag_per_ha 25cm","Large snag density","plot_large25_Snag_per_ha", c(8,3),cutoffs_one_is_sigconcern=NULL, cutoffs_high_is_good=NULL)
   
   #HPE species count
-  hpe2<-read_csv(here::here("Data_in", "qry_event_HPExotic_count_byPanelYear.csv"))
+  hpe2<-FuncReadCSV(here::here("Data_in", "qry_event_HPExotic_count_byPanelYear.csv"))
   thresh_list$hpe2 <- FuncThreshSub(cegl_bin, hpe2,"HPexotic_species_present_per_plot_v2","Exotic species #","HPexotic_species_present",c(0.5,3.5),cutoffs_one_is_sigconcern=NULL, cutoffs_high_is_good=NULL)
   
   #tree mortality and growth rate
-  growth_mort<-read_csv(here::here("Data_in", "qry_tree_eventGrowthMort_panel.csv"))
+  growth_mort<-FuncReadCSV(here::here("Data_in", "qry_tree_eventGrowthMort_panel.csv"))
   growth_mort$UnitCode<-growth_mort$Unit_Code
   
   thresh_list$tree_growth_mort <- FuncThreshSub(cegl_bin, growth_mort,"Class_2-4_Annual_Tree_Mortality_Percent","Tree Mortality","AnnualEventMortalityPercent",c(1.6),cutoffs_one_is_sigconcern=FALSE, cutoffs_high_is_good=FALSE)
@@ -1265,7 +1305,7 @@ FuncQAQCSitesMain <- function() {
   QAQCSitesOut_list <- list()
   
   # Stand height -----
-  SiteTemp_df <- read_csv(here::here("Data_in", "SiteMetrics.csv"))
+  SiteTemp_df <- FuncReadCSV(here::here("Data_in", "SiteMetrics.csv"))
   
   Site_df <- SiteTemp_df %>%
     dplyr::rename(Plot = location_name, Year = event_year, StandHeight = Stand_Height) %>%
@@ -1290,7 +1330,7 @@ FuncQAQCSitesMain <- function() {
   QAQCSitesOut_list[["StandHeight"]][["Diff_tab"]] <- StandHeightTemp_tab
   
   # Coarse woody debris counts by Plot -----
-  CWD_df <- read_csv(here::here("Data_in", "CWD.csv"))
+  CWD_df <- FuncReadCSV(here::here("Data_in", "CWD.csv"))
   # TRANSECT INFORMATION (X OR Y) MISSING FOR A LOOK007 2012 NON-QAQC RECORD, SO FOR THE TRANSECT-SPECIFIC ANALYSIS IT WAS COUNTED AS A MISMATCH <<<<<<<<
   CWD_df %<>%
     dplyr::select(Plot = location_name, Year = event_year, QAQC, Transect, Diameter, Decay = Decay_Class) %>%
@@ -1341,7 +1381,7 @@ FuncQAQCSitesMain <- function() {
   
   # COMMUNITY GROUP (OWN DASHBOARD TAB) -----
   # REQUIRED FIELD; NA/NA IS A MISMATCH
-  CG <- read_csv(here::here("Data_in", "Community.csv"))
+  CG <- FuncReadCSV(here::here("Data_in", "Community.csv"))
   CG$QAQC <- as.logical(CG$QAQC) # Change to T/F
   CG %<>%
     dplyr::rename(Plot = location_name, Year=event_year, CC = Community_Code, CG  = CommGroup) %>% # use standard variable names
@@ -1393,7 +1433,7 @@ FuncQAQCSitesMain <- function() {
   SiteDisturbSummary_list <- SiteDisturbPSA_list <- list()
   for (d in DistCol) {
     SD_df <- SiteTemp_df %>%
-      dplyr::select(Plot = location_name, QAQC, Year = event_year, d) %>%
+      dplyr::select(Plot = location_name, QAQC, Year = event_year, all_of(d)) %>%
       spread(key = QAQC, value = d) %>%
       dplyr::rename("Value1" = `-1`, "Value2" = `0`)
     
@@ -1454,8 +1494,8 @@ FuncQAQCSitesMain <- function() {
 
 FuncQAQCTreesMain <- function() {
   # Function to run tree QAQC analyses.
-  TreesN_df <- read_csv(here::here("Data_in", "TreesNorm.csv"))
-  TreesQ_df <- read_csv(here::here("Data_in", "TreesQAQC.csv"))
+  TreesN_df <- FuncReadCSV(here::here("Data_in", "TreesNorm.csv"))
+  TreesQ_df <- FuncReadCSV(here::here("Data_in", "TreesQAQC.csv"))
 
   # Data formatting -----
   names(TreesN_df) <- gsub("Condition_Damage_Code_", "Damage", names(TreesN_df))
@@ -1534,7 +1574,7 @@ FuncQAQCTreesMain <- function() {
   # Tree counts -----
   # Used data in 'all_trees', regardless of status
   
-  TreeCounts_df <- read_csv(here::here("Data_in", "AllTrees.csv"))
+  TreeCounts_df <- FuncReadCSV(here::here("Data_in", "AllTrees.csv"))
   # >>>>>>>> ERROR: Warning: 1 parsing failure.
   #row                 col           expected actual                   file
   #1453 Foliage_Condition_3 1/0/T/F/TRUE/FALSE      N 'Data_in/AllTrees.csv'
@@ -1571,7 +1611,7 @@ FuncQAQCTreesMain <- function() {
   QAQCTreesOut_list[["TreeCounts"]][["ECDF_plot"]] <- FuncPlotTreesECDF(dat = QAQCTreesOut_list[["TreeCounts"]][["FinalDat_df"]], plot_vals = QAQCTreesOut_list[["TreeCounts"]][["plot_vals"]])
   
   # Seedling / sapling counts ----
-  SeedSapCounts_df <- read_csv(here::here("Data_in", "SeedlingsSaplings.csv"))
+  SeedSapCounts_df <- FuncReadCSV(here::here("Data_in", "SeedlingsSaplings.csv"))
   SeedSapCounts_df %<>%
     dplyr::mutate(MC = paste0("M", Module, "C", Corner),
            PlotYear = paste(location_name, event_year, sep="_")) %>%
@@ -1582,13 +1622,13 @@ FuncQAQCTreesMain <- function() {
   SeedSapCounts_df[is.na(SeedSapCounts_df)] <- 0
   SeedSapCounts_df %<>%
     group_by(PlotYear, QAQC, MC) %>%
-    dplyr::summarize_at(.vars=c("Seed5_15", "Seed15_30",  "Seed30_50", "Seed50_137", "Sap0_1", "Sap1_2.5", "Sap2.5_5", "Sap5_10"), funs(n=sum)) %>%
+    dplyr::summarize(dplyr::across(c(Seed5_15, Seed15_30, Seed30_50, Seed50_137, Sap0_1, Sap1_2.5, Sap2.5_5, Sap5_10), sum)) %>%
     ungroup()
   names(SeedSapCounts_df) <- c("PlotYear", "QAQC", "MC", "Seed5_15", "Seed15_30", "Seed30_50", "Seed50_137", "Sap0_1", "Sap1_2.5", "Sap2.5_5", "Sap5_10")
   
   for (i in names(SeedSapCounts_df)[4:11]) {
     SeedSapSub_df <- SeedSapCounts_df %>%
-      dplyr::select(PlotYear, QAQC, MC, i) %>%
+      dplyr::select(PlotYear, QAQC, MC, all_of(i)) %>%
       spread(key=QAQC, value=i) %>%
       dplyr::rename(Qsurv=`-1`, Nsurv=`0`) %>%
       dplyr::mutate(Mean = (Nsurv + Qsurv)/2,
@@ -1608,7 +1648,7 @@ FuncQAQCTreesMain <- function() {
     }
   
     # Canopy cover by Plot-Year -----
-    Canopy_df <- read_csv(here::here("Data_in", "Densiometer.csv"))
+    Canopy_df <- FuncReadCSV(here::here("Data_in", "Densiometer.csv"))
     Canopy_df %<>%
       dplyr::rename(Plot = location_name, Year = event_year, Dxn=Direction, Densio=Spherical_Densiometer_Tally) %>%
       dplyr::mutate(PlotYear = paste0(Plot, "_", Year)) %>% # In case a single plot has QAQC survey in multiple survey cycles
@@ -1889,7 +1929,7 @@ FuncQAQCTreesMain <- function() {
 
 FuncQAQCHerbsMain <- function () {
   # Function to run herb QAQC analyses.
-  HerbsTemp_df <- read_csv(here::here("Data_in", "Herbs.csv")) %>%
+  HerbsTemp_df <- FuncReadCSV(here::here("Data_in", "Herbs.csv")) %>%
     filter(Species_Original!="Carya sp.") # <<<<<<<<<<<<<<<<<<<<<< THIS IS A TEMPORARY FIX SO I CAN CONTINUE WORKING ON DATABASE--THERE ARE DUPLICATE RECORD PROBLEMS WITH THIS SPECIES
   herbs_to_combine <- c("VIOL", "VITI", "CELT", "CARY", "CARE", "SANI", "AGRI", "ULMU", "SMIL", "DICH", "QUER", "POTE", "ELEP", "RUBU", "DESM", "GALI") # species within these herb genera are difficult to ID, so are analyzed at genus level for some analyses
   
@@ -1984,7 +2024,7 @@ FuncQAQCHerbsMain <- function () {
       spread(key=QAQC, value=value) 
     colnames(Herbs10SqM_df)[4:5] <- c("Nsurv", "Qsurv")
     
-    Temp10SqM_list <- FuncHerbsMatch(Dat_df = Herbs10SqM_df, group_vec = c("PlotID", "`10SqM`"))
+    Temp10SqM_list <- FuncHerbsMatch(Dat_df = Herbs10SqM_df, group_vec = c("PlotID", "10SqM"))
     
     HM10SqM_list[[x]] <- Temp10SqM_list[[1]] # this one is used to generate the herb match report in .Rmd
     HS10SqM_list[[x]] <- Temp10SqM_list[[2]] # this one is used to plot herb richness histograms in .Rmd
@@ -1996,7 +2036,7 @@ FuncQAQCHerbsMain <- function () {
       spread(key=QAQC, value=value) 
     colnames(Herbs1SqM_df)[4:5] <- c("Nsurv", "Qsurv")
     
-    Temp1SqM_list <- FuncHerbsMatch(Dat_df = Herbs1SqM_df, group_vec = c("PlotID", "`1SqM`"))
+    Temp1SqM_list <- FuncHerbsMatch(Dat_df = Herbs1SqM_df, group_vec = c("PlotID", "1SqM"))
     
     HM1SqM_list[[x]] <- Temp1SqM_list[[1]] # this one is used to generate the herb match report in .Rmd
     HS1SqM_list[[x]] <- Temp1SqM_list[[2]] # this one is used to plot herb richness histograms in .Rmd
@@ -2018,7 +2058,7 @@ FuncQAQCHerbsMain <- function () {
 
 FuncOakHickMain <- function () {
   # Function to run oak-hickory regeneration analyses on Oak-Hickory plots only
-  VegRegen_df <- read_csv(here::here("Temp_out", "VegDat_cleaned.csv")) %>% # <<<<<<<<<<<< GENERATE AN ERROR IF THIS IS NOT AVAILABLE --ACTUALLY NEED TO MAKE SURE ALSO THAT IT'S UPDATED
+  VegRegen_df <- FuncReadCSV(here::here("Temp_out", "VegDat_cleaned.csv")) %>% # <<<<<<<<<<<< GENERATE AN ERROR IF THIS IS NOT AVAILABLE --ACTUALLY NEED TO MAKE SURE ALSO THAT IT'S UPDATED
     dplyr::select(SubPark, Cycle, Year, Plot, Latitude, Longitude, QAQCPlot, CGShort, EventID) %>%
     distinct()
   VegRegen_df$Cycle <- factor(VegRegen_df$Cycle)
@@ -2051,7 +2091,7 @@ FuncOakHickMain <- function () {
   }
   
   # Format seedling/sapling data -----
-  RegenSS_df <- read_csv(here::here("Data_in", "OakHickSS.csv")) %>%
+  RegenSS_df <- FuncReadCSV(here::here("Data_in", "OakHickSS.csv")) %>%
     dplyr::rename(EventID = event_name_date_calc) %>%
     dplyr::mutate(MC = paste0("M", Module, "C", Corner)) %>%
     left_join(VegRegen_df, by = "EventID") %>%
@@ -2063,11 +2103,12 @@ FuncOakHickMain <- function () {
   
   MissingTemp <- FuncMissingRegen(Dat_df = RegenSS_df, PlotCG_link = PlotCG_link, TreeDat = FALSE)
   RegenSS_df <- MissingTemp[[1]]
-  RegenSS_df[is.na(RegenSS_df)] <- 0
+  num_cols <- c("Seed5_50", "Seed5_15", "Seed15_30", "Seed30_50", "Seed50_137", "Sap0_1", "Sap1_2.5", "Sap2.5_5",  "Sap5_10") # <<<<<<<< r update change
+  RegenSS_df[num_cols][is.na(RegenSS_df[num_cols])] <- 0 # <<<<<<<< r update change
   VegRegen_df <- rbind.fill(VegRegen_df, MissingTemp[[2]])
   
   # Format tree DBH data -----
-  RegenTree_df <- read_csv(here::here("Data_in", "OakHickTree.csv")) %>% # tree dbh data, status=1 means alive, status=2 means dead. Some data import issue with "Snag_Height" but we are not using those data anyway in this analysis <<<<<<<<<<<<<< THROWS A WARNING
+  RegenTree_df <- FuncReadCSV(here::here("Data_in", "OakHickTree.csv")) %>% # tree dbh data, status=1 means alive, status=2 means dead. Some data import issue with "Snag_Height" but we are not using those data anyway in this analysis <<<<<<<<<<<<<< THROWS A WARNING
     dplyr::rename(EventID = event_name_date_calc) %>%
     left_join(VegRegen_df, by = "EventID") %>%
     # filter(Plot %in% oak_hick_plots) %>% # only keep data from Oak-Hickory plots
@@ -2235,8 +2276,8 @@ FuncOakHickMain <- function () {
   OH_SSTemp2_df[is.na(OH_SSTemp2_df)] <- 0
   
   # Bootstrap counts for OSI
-  OSIboot_out <- vector("list", length = 1000)
-  for (B in 1:1000) { # 1000 bootstrap samples
+  OSIboot_out <- vector("list", length = nboot)
+  for (B in 1:nboot) { # bootstrap samples
     
     OSIboot_samp <- OH_SSTemp2_df %>%
       group_by(Plot, Cycle, OHSpecies) %>%
@@ -2277,7 +2318,7 @@ FuncOakHickMain <- function () {
     OSIboot_out[[B]] <- full_join(OHSeed_df, OHSap_df, by=c("EventID", "SubPark", "CGShort", "Plot", "Cycle")) %>%
       dplyr::select(EventID, SubPark, CGShort, Plot, Cycle, SeedRatio, SapRatio) %>%
       dplyr::mutate(PartialOSI = SeedRatio + SapRatio)
-  } # end 1000 bootstraps
+  } # end bootstraps
   
   # Calculate bootstrap 95% CI
   OSIboot_df <- do.call("rbind", OSIboot_out) %>%
@@ -2335,8 +2376,8 @@ FuncOakHickMain <- function () {
   OHImport_SSTemp2_df[is.na(OHImport_SSTemp2_df)] <- 0
   
   # Bootstrap counts for Importance
-  Importboot_out <- vector("list", length = 1000)
-  for (B in 1:1000) { # 1000 bootstrap samples
+  Importboot_out <- vector("list", length = nboot)
+  for (B in 1:nboot) { # bootstrap samples
     
     Importboot_samp <- OHImport_SSTemp2_df %>%
       group_by(Plot, Cycle) %>%
@@ -2366,7 +2407,7 @@ FuncOakHickMain <- function () {
     Importboot_out[[B]] <- Importboot2_temp %>% 
       mutate(logImportance = log(Import_1ptScore + Import_2ptScore + Import_10ptScore + Import_50ptScore + 1)) %>%
       select(-Import_1ptScore, -Import_2ptScore, -Import_10ptScore, -Import_50ptScore)
-  } # end 1000 bootstraps
+  } # end bootstraps
   
   # Calculate bootstrap 95% CI
   Importboot_df <- do.call("rbind", Importboot_out) %>%
@@ -2380,7 +2421,7 @@ FuncOakHickMain <- function () {
   OHtemp_df %<>% mutate_if(is.numeric, round, 2)
   
   # Add in specific survey dates -----
-  Burn_df <- read_csv(here::here("Data_in", "BurnPlots.csv"))
+  Burn_df <- FuncReadCSV(here::here("Data_in", "BurnPlots.csv"))
   PlotDates <- gather(Burn_df[, c("Plot", "Date_Plot_Established", "Date_Plot_Revisited")], key = SurveyType, value = SurveyDate, -Plot) %>%
     dplyr::select(-SurveyType) %>%
     dplyr::mutate(SurveyDate = mdy(SurveyDate),
@@ -2397,8 +2438,11 @@ FuncOakHickMain <- function () {
     left_join(OHDat_df2, by=c("SubPark", "EventID", "Plot", "CGShort", "Cycle"))
   MissingYears <- which(is.na(OH_df$Year)) # <<<<<<<<<<<< ERROR CHECK FOR PLOT-SURVEYS MISSING IN THE MAIN DATA
   MissingYears
-  OH_df[MissingYears, "Year"] <- substr(OH_df[MissingYears, "EventID"], nchar(OH_df[MissingYears, "EventID"])-3, nchar(OH_df[MissingYears, "EventID"]))   
-  OH_df$Year <- as.integer(OH_df$Year)
+  
+  print(OH_df$EventID[MissingYears])
+  ev <- OH_df$EventID[MissingYears]
+  OH_df$Year[MissingYears] <- as.integer(substr(ev, nchar(ev) - 3, nchar(ev)))
+  OH_df <- as.data.frame(OH_df)
   
   # Add in the burn dates -----
   Burns <- Burn_df %>%
@@ -2447,3 +2491,4 @@ FuncOakHickMain <- function () {
     OHfinal_df = OHfinal_df)
   saveRDS(OakHickOut_list, "Temp_out/OakHickOut.RDS")
 }
+

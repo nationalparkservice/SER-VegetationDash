@@ -169,13 +169,13 @@ observeEvent(eventExpr = input$button_import, {
     c("AllTrees.csv", "QAQC - Trees"),
     c("SeedlingsSaplings.csv", "QAQC - Trees"),
     c("Densiometer.csv", "QAQC - Trees"),
-    c("SiteMetrics.csv", "QAQC - Site"),
-    c("CWD.cvs", "QAQC - Site"), 
-    c("Community.csv", "QAQC - Site"),
+    c("SiteMetrics.csv", "QAQC - Sites"),
+    c("CWD.csv", "QAQC - Sites"), 
+    c("Community.csv", "QAQC - Sites"),
     c("cegl_x_bin.csv", "Thresholds"),
     c("qry_event_HPExotic_count_byPanelYear.csv", "Thresholds"),
-    c("qry_panel_taxaGroup_seedsapl.csv", "Thresholds"),
-    c("qry_panel_taxaGroup_tree.csv", "Thresholds"),
+    # c("qry_panel_taxaGroup_seedsapl.csv", "Thresholds"), # check if used in dash
+    # c("qry_panel_taxaGroup_tree.csv", "Thresholds"), # check if used in dash
     c("qry_snagDensity_event_panel.csv", "Thresholds"),
     c("qry_stat_cwd_byPanelYear.csv", "Thresholds"),
     c("qry_tree_eventGrowthMort_panel.csv", "Thresholds")))
@@ -218,14 +218,14 @@ observeEvent(eventExpr = input$button_import, {
   }
   
   # QAQC - Herbs
-  if(as.character(Process_df$DataRequired[Process_df$Analysis == "QAQC - Herbs"]) %in% dat_temp) {
+if(all(as.character(Process_df$DataRequired[Process_df$Analysis == "QAQC - Herbs"]) %in% dat_temp)) {
     incProgress(1/10, detail = " for 'QAQC - Herbs' reports")
     FuncQAQCHerbsMain()
     Out_list$QAQCHerbs <- readRDS(here::here("Temp_out", "QAQCHerbsOut.RDS"))
   }
   
     # Thresholds
-  if(as.character(Process_df$DataRequired[Process_df$Analysis == "Thresholds"]) %in% dat_temp) {
+  if(all(as.character(Process_df$DataRequired[Process_df$Analysis == "Thresholds"]) %in% dat_temp)) {
     incProgress(1/10, detail = " for 'Thresholds' plots")
     FuncThreshMain()
     Out_list$ThreshList <- readRDS(here::here("Temp_out", "ThreshList.RDS"))
@@ -242,6 +242,8 @@ observeEvent(eventExpr = input$button_import, {
 ```{r gen_reports}
 # Generate Reports
 observeEvent(eventExpr = input$button_rpts, {
+  saveRDS(isolate(reactiveValuesToList(input)), "temp_input.RDS")
+  saveRDS(isolate(reactiveValuesToList(Out_list)), "temp_Out_list.RDS")
   withProgress(message = "Generating reports...", value = 0, {
     
     # # Oak-Hickory Regeneration
@@ -314,7 +316,7 @@ Inputs {.sidebar data-width=200}
 -------------------------------------
 ```{r Thresh_Input}
 br()
-useShinyjs(rmd = TRUE)
+shinyjs::useShinyjs(rmd = TRUE)
 actionButton("button_Thresh_about", "  ABOUT THIS PAGE", icon = icon("question-sign", lib = "glyphicon"), style='padding:4px', width = "180px")
 
 selectInput("sel_ThreshDisplay",
@@ -355,7 +357,7 @@ renderUI({
   })
 
 observe({ # enable input conditionally
-        toggleState(id = "sel_ThreshPark", condition = input$sel_ThreshDisplay != "one_param")
+        shinyjs::toggleState(id = "sel_ThreshPark", condition = input$sel_ThreshDisplay != "one_param")
       })
 observe({
   if (!is.null(input$sel_ThreshDisplay)) {

@@ -190,7 +190,7 @@ kable(QAQCSitesOut[["SiteDisturb_list"]][["SiteDisturbPSASummary_df"]])
 
 **Site disturbance PSA plot**
 ```{r fig.width=7.5, fig.height=3.5, fig.align='center', results='hide', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
-QAQCSitesOut[["SiteDisturb_list"]][["SiteDisturbPSA_plot"]]
+# QAQCSitesOut[["SiteDisturb_list"]][["SiteDisturbPSA_plot"]]
 ```
 
 ### COARSE WOODY DEBRIS COUNT BY PLOT
