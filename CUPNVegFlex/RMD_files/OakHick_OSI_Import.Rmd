@@ -1,0 +1,207 @@
+---
+title: "OAK HICKORY REGENERATION"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+fontsize: 12pt
+output:
+  pdf_document:
+    toc: no
+  word_document:
+    toc: no
+mainfont: Cambria
+geometry: margin=.5in
+params:
+  type: PartialOSI
+classoption: landscape
+---
+
+```{r include=FALSE}
+library(knitr)
+library(tidyverse)
+library(here)
+
+FuncOHPlotHist <- function(Dat_df, metric) {
+  # Function to generate histogram of reliability for oak-hickory regeneration metrics
+  #
+  # Args:
+  #   Dat_df:  The final OH data
+  #   metric:  "PartialOSI", "log10ImpScore"
+  # Returns:
+  #   Histogram of OH metric reliability
+  RelOH_df <- Dat_df %>%
+    filter(Cycle %in% unique(Dat_df$Cycle[Dat_df$QAQCPlot==TRUE]))
+  RelOHWide_df <- spread(data = RelOH_df[, c("Plot", "Cycle", "QAQCPlot", metric)], key = QAQCPlot, value = metric)    
+  names(RelOHWide_df) <- c("Plot", "Cycle", "Q1", "Q2") # <<<<<<<<<<< MAY NEED TO GENERALIZE TO >2 SURVEY CYCLES
+  RelOHWide_df$Diff <- RelOHWide_df$Q1 - RelOHWide_df$Q2 # only for oak-hickory plots <<<<<<<<<<<<<< THIS MAY DIFFER FROM BEFORE
+  
+  OHHist_plot <- ggplot(RelOHWide_df, aes(x=Diff)) +
+    geom_histogram(binwidth = 0.1, center=0, colour="black") +
+    geom_vline(xintercept=0, color="red") +
+    labs(x=paste0("Difference in Oak-Hickory ", switch(metric, "PartialOSI" = "partial OSI", "log10ImpScore" = "log10(Importance)")), y="# of QAQC surveys", subtitle=paste0("Across ALL Community Groups, 90% CI: ", round(quantile(RelOHWide_df$Diff, probs=c(.05,.95)), 2)[1], " to ", round(quantile(RelOHWide_df$Diff, probs=c(.05,.95)), 2)[2])) +
+    theme_bw(base_size = 10)
+  return(OHHist_plot)
+}
+
+FuncOHWilcox <- function(Dat_df, metric, CycLevs) {
+  # Function to generate histogram of reliability for oak-hickory regeneration metrics
+  #
+  # Args:
+  #   Dat_df:  The final OH data
+  #   metric:  "PartialOSI", "log10ImpScore"
+  #   CycLevs:  Vector of survey cycles, e.g., "(2010,2015]" "(2015,2020]"
+  # Returns:
+  #   Wilcoxon signed-rank test table by burn status. Use only plots with partial OSI calculated for both cycles. Therefore, the count of resurveys in this table is less than actual number resurveyed (b/c sometimes a plot that was resurveyed had OSI=NaN for one of the surveys)
+  names(Dat_df)[names(Dat_df)==metric] <- "Metric"
+  Datwide_df <- Dat_df %>%
+    filter(QAQCPlot == FALSE) %>%
+    dplyr::select(SubPark, Plot, CGShort, Cycle, Metric) %>%
+    spread(key = Cycle, value = Metric)
+  Datwide_df$delta <- unlist(Datwide_df[max(CycLevs)] - Datwide_df[min(CycLevs)])
+  
+  Unburned = setdiff(unique(Dat_df$Plot), unique(Dat_df$Plot[Dat_df$PriorBurn==TRUE]))
+  
+  RegenBurned_list <- vector("list", length = length(unique(Dat_df$SubPark)))
+  for (s in unique(Dat_df$SubPark)) {
+    SubDat_df <- Datwide_df %>%
+      filter(SubPark==s) %>% # for counting sample size per survey, keep ones that were not resurveyed
+      mutate(Unburned = Plot %in% Unburned)
+    unburned_N <- nrow(subset(SubDat_df, !is.na(delta) & Unburned==TRUE))
+    # Wilcox test only uses plots that were resurveyed. Calculate only if at least 6 unburned resurveyed plots.
+    if(unburned_N  >= 6) { # ifelse doesn't work for some reason
+      unburned_stat <- wilcox.test( 
+        unlist(subset(SubDat_df, !is.na(delta) & Unburned==TRUE, select = max(CycLevs))),
+        unlist(subset(SubDat_df, !is.na(delta) & Unburned==TRUE, select = min(CycLevs))),
+        paired=TRUE, exact=TRUE, conf.int = TRUE, conf.level=0.9)
+      unburned_CI90 <- round(as.numeric(unburned_stat$conf.int), 2)
+      unburned_p <- round(as.numeric(unburned_stat$p.value), 2)
+    } else {
+      unburned_CI90 <- c(NA, NA)
+      unburned_p <- NA
+    }
+    # Specify in notes that it's a two-sided 90% CI. 'dat2' is first because desired test statistic is 'dat2 - dat1'
+    
+    burned_N <- nrow(subset(SubDat_df, !is.na(delta) & Unburned==FALSE))
+    if(burned_N  >= 6) {
+      burned_stat <- wilcox.test( 
+        unlist(subset(SubDat_df, !is.na(delta) & Unburned==FALSE, select = max(CycLevs))),
+        unlist(subset(SubDat_df, !is.na(delta) & Unburned==FALSE, select = min(CycLevs))),
+        paired=TRUE, exact=TRUE, conf.int = TRUE, conf.level=0.9)
+      burned_CI90 <- round(as.numeric(burned_stat$conf.int), 2)
+      burned_p <- round(as.numeric(burned_stat$p.value), 2)
+    } else {
+      burned_CI90 <- c(NA, NA)
+      burned_p <- NA
+    }
+    
+    RegenBurned_list[[s]] <- c(
+      s,
+      sum(!is.na(SubDat_df$delta)),
+      unburned_N,
+      unburned_CI90,
+      unburned_p,
+      burned_N,
+      burned_CI90,
+      burned_p)
+  }
+  BurnWilcox_df <- data.frame(do.call("rbind", RegenBurned_list))
+  
+  for(x in 2:ncol(BurnWilcox_df)) {
+    BurnWilcox_df[,x] <- as.numeric(as.character(BurnWilcox_df[,x]))
+  }
+  names(BurnWilcox_df) <- c("SubPark", "N_resurveys", "UNBURNED_N", "Low90CI", "High90CI", "P_value", "BURNED_N", "Low90CI", "High90CI", "P_value")
+  return(BurnWilcox_df)
+}
+
+FuncOHBoxplot <- function(Dat_df, metric) {
+  # Function to generate boxplots of oak-hickory regeneration metric by Subpark-Burn
+  #
+  # Args:
+  #   Dat_df:  The final OH data
+  #   metric:  "PartialOSI", "log10ImpScore"
+  # Returns:
+  #   Boxplots by SubPark-Burn
+  names(Dat_df)[names(Dat_df)==metric] <- "Metric"
+  OH_Boxplots <- ggplot(data=subset(Dat_df, QAQCPlot==FALSE), aes(y=Metric, x=SubPark, fill=PriorBurn)) +
+     geom_boxplot() +
+     scale_fill_manual(values=c("gray", "red")) +
+     labs(title=paste0(metric," by SubPark and prescribed burn history"), subtitle="(Oak-hickory communities only; Excludes QAQC data)", y=metric) +
+     theme_bw(base_size = 10)
+  return(OH_Boxplots)
+}
+
+FuncOHBurnTiming <- function(Dat_df, metric) {
+  # Function to generate scatterplots of oak-hickory regeneration metric by time-since-burn
+  #
+  # Args:
+  #   Dat_df:  The final OH data
+  #   metric:  "PartialOSI", "log10ImpScore"
+  # Returns:
+  #   Scatterplots showing relationship between time-since-burn and regeneration metric, in Oak-Hickory communities
+  names(Dat_df)[names(Dat_df)==metric] <- "Metric"
+  TimeSinceBurn_df <- Dat_df %>%
+    filter(QAQCPlot==FALSE & !is.na(MostRecentBurn) & !is.na(SurveyDate)) %>%
+    mutate(YrsSinceBurn = as.numeric((SurveyDate - MostRecentBurn)/365))
+  max_x <- ceiling(max(TimeSinceBurn_df$YrsSinceBurn))
+  BurnTiming_plot <- ggplot(data=TimeSinceBurn_df, aes(x = YrsSinceBurn, y = Metric)) +
+    geom_point() +
+    labs(x="Years since most recent prescribed burn", subtitle=paste0("Relationship between ", metric, " and time-since-prescribed burn, by Community Group"), y=metric) +
+    scale_x_continuous(labels=seq(0, max_x, by = 2), breaks=seq(0, max_x, by = 2), limits=c(0, max_x)) +
+    geom_vline(xintercept=seq(1, max_x, by = 1), color="red", linetype="dotted") +
+    geom_vline(xintercept = 0, color="red") +
+    theme_bw(base_size = 10) +
+    facet_wrap(~CGShort)
+  return(BurnTiming_plot)
+}
+
+OakHickDat <- readRDS(here::here("Temp_out", "OakHickDat.RDS"))
+OakHickOut <- readRDS(here::here("Temp_out", "OakHickOut.RDS"))
+```
+
+**Figure 1. Histogram of observer variability in Oak-Hickory `r params$type`**
+*Represents the difference in Oak-Hickory `r params$type` between the initial survey of a plot and the corresponding QAQC survey in that same year, i.e., initial survey - QAQC survey.*
+
+&nbsp;
+
+```{r fig.width=4, fig.height=4, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+FuncOHPlotHist(Dat_df = OakHickDat, metric = params$type)
+```
+
+\newpage
+
+**Table 1. Sample sizes for `r params$type` estimates**
+*For each SubPark, the number of plots classified as Oak-Hickory, the number of Oak-Hickory plots with at least two cycles of non-QAQC survey data, and the number of QAQC surveys of an Oak-Hickory plot. 'NBurned' is the number of Oak-Hickory plots prescribe burned at least once (at any time, including prior to the initial survey). Subsequent columns show the number of Oak-Hickory plots prescribe burned in the five years before that survey cycle.*
+
+&nbsp;
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+summary_df <- switch(params$type,
+        PartialOSI = OakHickOut$OH_OSI_summary_df,
+        log10ImpScore = OakHickOut$OH_Import_summary_df)
+kable(summary_df, row.names = FALSE, align = 'c')
+```
+
+\newpage
+
+**Table 2. Wilcox rank statistics by SubPark**
+*Only showing data for non-QAQC. 'N_resurveys' is the number of plots with partial OSI estimates for at least two survey cycles. 'UNBURNED_N' is the number of resurveyed plots that have NEVER been prescribe burned, followed by Wilcox rank sum test 95% confidence intervals and p-values (for sample sizes of 6 or more plots in the most recent survey cycle). 'BURNED_N' is the number of resurveyed plots that were prescribe burned at ANY time prior to the most recent survey.*
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+wilcox_df <- FuncOHWilcox(Dat_df = OakHickDat, metric = params$type, CycLevs = OakHickOut$OH_CycLevs)
+options(knitr.kable.NA = '')
+kable(wilcox_df, row.names = FALSE, align='c')
+```
+
+\newpage
+
+**Figure 2. Scatterplots of regeneration metric vs. most recent burn.**
+*Only showing data for non-QAQC. Facet cells are Community Groups. In each facet cell, a plot may be represented more than once (multiple survey cycles).*
+```{r fig.width=8, fig.height=5.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+FuncOHBurnTiming(Dat_df = OakHickDat, metric = params$type)
+```
+
+**Figure 3. Line plots of partial OSI estimates.**
+*Only showing data for non-QAQC. Left-side plot shows survey plots that have never been prescribe burned. On right-side plot, dashed lines indicate a prescribed burn occurred between the two survey cycles. If a prescribed burn occurred ANY time prior to Cycle 1 [2010, 2014], it is shown as a horizontal line to the left of Cycle 1. We do not have a partial OSI estimate prior to Cycle 1.* 
+```{r fig.width=9, fig.height=6.5, fig.align='center', results='hide', echo=FALSE, warning=FALSE}
+(lineplots <- switch(params$type,
+        PartialOSI = OakHickOut$OH_OSI_Lineplots,
+        log10ImpScore = OakHickOut$OH_Import_Lineplots))
+```
+
